@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Journal Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // --- GANTI DENGAN CONFIG FIREBASE ANDA ---
+        const firebaseConfig = {
+          apiKey: "AIzaSyADD7hRJUGKdkuIiLZHK96wHSmz0FDMyWI",
+          authDomain: "jurnal-data-id.firebaseapp.com",
+          projectId: "jurnal-data-id",
+          storageBucket: "jurnal-data-id.firebasestorage.app",
+          messagingSenderId: "361080177174",
+          appId: "1:361080177174:web:4a532541bf366f5328ab37",
+          measurementId: "G-BL6H435904"
+        };
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // App State
+        let currentUser = null;
+        let accountData = null;
+
+        // UI Elements
+        const authSection = document.getElementById('auth-section');
+        const accountSection = document.getElementById('account-section');
+        const journalSection = document.getElementById('journal-section');
+        const loadingOverlay = document.getElementById('loading-overlay');
+
+        // Helper: Show Section
+        function showSection(id) {
+            [authSection, accountSection, journalSection].forEach(s => s.classList.add('hidden'));
+            document.getElementById(id).classList.remove('hidden');
+        }
+
+        // --- AUTH LOGIC ---
+        window.handleAuth = async (mode) => {
+            const email = document.getElementById('email').value;
+            const pass = document.getElementById('password').value;
+            try {
+                if (mode === 'login') await signInWithEmailAndPassword(auth, email, pass);
+                else await createUserWithEmailAndPassword(auth, email, pass);
+            } catch (e) { alert("Error: " + e.message); }
+        };
+
+        window.logout = () => signOut(auth);
+
+        onAuthStateChanged(auth, async (user) => {
+            loadingOverlay.classList.add('hidden');
+            if (user) {
+                currentUser = user;
+                checkAccount();
+            } else {
+                showSection('auth-section');
+            }
+        });
+
+        // --- ACCOUNT LOGIC ---
+        async function checkAccount() {
+            const docSnap = await getDoc(doc(db, "users", currentUser.uid, "settings", "account"));
+            if (docSnap.exists()) {
+                accountData = docSnap.data();
+                initJournal();
+            } else {
+                showSection('account-section');
+            }
+        }
+
+        window.saveAccount = async (e) => {
+            e.preventDefault();
+            const data = {
+                name: document.getElementById('acc-name').value,
+                balance: parseFloat(document.getElementById('acc-balance').value),
+                currency: document.getElementById('acc-currency').value
+            };
+            await setDoc(doc(db, "users", currentUser.uid, "settings", "account"), data);
+            checkAccount();
+        };
+
+        // --- JOURNAL LOGIC ---
+        function initJournal() {
+            showSection('journal-section');
+            document.getElementById('display-acc-name').innerText = accountData.name;
+            
+            // Listen Trades
+            const q = query(collection(db, "users", currentUser.uid, "trades"));
+            onSnapshot(q, (snapshot) => {
+                const trades = [];
+                snapshot.forEach(doc => trades.push({id: doc.id, ...doc.data()}));
+                renderTrades(trades);
+            });
+        }
+
+        window.addTrade = async (e) => {
+            e.preventDefault();
+            const trade = {
+                pair: document.getElementById('t-pair').value.toUpperCase(),
+                type: document.getElementById('t-type').value,
+                pnl: parseFloat(document.getElementById('t-pnl').value),
+                date: new Date().toISOString()
+            };
+            await addDoc(collection(db, "users", currentUser.uid, "trades"), trade);
+            e.target.reset();
+        };
+
+        window.deleteTrade = async (id) => {
+            if(confirm("Hapus data ini?")) await deleteDoc(doc(db, "users", currentUser.uid, "trades", id));
+        };
+
+        function renderTrades(trades) {
+            const container = document.getElementById('trades-list');
+            let totalPnL = 0;
+            container.innerHTML = trades.map(t => {
+                totalPnL += t.pnl;
+                return `
+                    <div class="bg-slate-800 p-4 rounded-xl flex justify-between items-center mb-3">
+                        <div>
+                            <p class="font-bold text-white">${t.pair} <span class="text-xs font-normal text-slate-400">${t.type}</span></p>
+                            <p class="text-xs text-slate-500">${new Date(t.date).toLocaleDateString()}</p>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span class="font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                                ${t.pnl >= 0 ? '+' : ''}${t.pnl}
+                            </span>
+                            <button onclick="deleteTrade('${t.id}')" class="text-slate-600 hover:text-rose-500"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            document.getElementById('stat-pnl').innerText = totalPnL.toLocaleString();
+            document.getElementById('stat-balance').innerText = (accountData.balance + totalPnL).toLocaleString();
+            lucide.createIcons();
+        }
+
+        lucide.createIcons();
+    </script>
+    <style>
+        body { background-color: #020617; color: #f8fafc; font-family: sans-serif; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <div id="loading-overlay" class="fixed inset-0 bg-slate-950 flex items-center justify-center z-50">
+        <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-blue-500"></div>
+    </div>
+
+    <!-- 1. AUTH SECTION -->
+    <section id="auth-section" class="hidden min-h-screen flex items-center justify-center p-4">
+        <div class="bg-slate-900 p-8 rounded-2xl border border-slate-800 w-full max-w-md shadow-2xl">
+            <div class="text-center mb-8">
+                <div class="bg-blue-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"><i data-lucide="book-open" class="text-white"></i></div>
+                <h1 class="text-2xl font-bold">Trading Journal</h1>
+                <p class="text-slate-400">Masuk untuk melihat jurnal Anda</p>
+            </div>
+            <div class="space-y-4">
+                <input id="email" type="email" placeholder="Email" class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
+                <input id="password" type="password" placeholder="Password" class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
+                <button onclick="handleAuth('login')" class="w-full bg-blue-600 py-3 rounded-lg font-bold">Login</button>
+                <button onclick="handleAuth('register')" class="w-full text-blue-400 text-sm w-full text-center">Daftar Akun Baru</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- 2. ACCOUNT SETUP SECTION -->
+    <section id="account-section" class="hidden min-h-screen flex items-center justify-center p-4">
+        <div class="bg-slate-900 p-8 rounded-2xl border border-slate-800 w-full max-w-md">
+            <h2 class="text-xl font-bold mb-6">Setup Akun Trading</h2>
+            <form onsubmit="saveAccount(event)" class="space-y-4">
+                <input id="acc-name" placeholder="Nama Akun (ex: XM ECN)" required class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
+                <input id="acc-balance" type="number" placeholder="Modal Awal" required class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
+                <select id="acc-currency" class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
+                    <option value="USD">USD ($)</option>
+                    <option value="IDR">IDR (Rp)</option>
+                </select>
+                <button type="submit" class="w-full bg-emerald-600 py-3 rounded-lg font-bold">Simpan & Mulai</button>
+            </form>
+        </div>
+    </section>
+
+    <!-- 3. JOURNAL MAIN SECTION -->
+    <section id="journal-section" class="hidden">
+        <header class="bg-slate-900 p-4 border-b border-slate-800 flex justify-between items-center sticky top-0 z-10">
+            <h1 id="display-acc-name" class="font-bold">Journal</h1>
+            <button onclick="logout()" class="text-slate-400 hover:text-rose-500"><i data-lucide="log-out"></i></button>
+        </header>
+
+        <main class="max-w-4xl mx-auto p-4 space-y-6">
+            <!-- Stats -->
+            <div class="grid grid-cols-2 gap-4">
+                <div class="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                    <p class="text-xs text-slate-500 uppercase font-bold">Current Balance</p>
+                    <p id="stat-balance" class="text-xl font-bold">0</p>
+                </div>
+                <div class="bg-slate-900 p-4 rounded-xl border border-slate-800">
+                    <p class="text-xs text-slate-500 uppercase font-bold">Total PnL</p>
+                    <p id="stat-pnl" class="text-xl font-bold">0</p>
+                </div>
+            </div>
+
+            <!-- Form -->
+            <form onsubmit="addTrade(event)" class="bg-slate-900 p-6 rounded-2xl border border-slate-800 space-y-4">
+                <h3 class="font-bold mb-2">Input Trade</h3>
+                <div class="grid grid-cols-2 gap-3">
+                    <input id="t-pair" placeholder="Pair (ex: XAUUSD)" required class="bg-slate-800 rounded-lg p-3 text-white">
+                    <select id="t-type" class="bg-slate-800 rounded-lg p-3 text-white">
+                        <option value="BUY">BUY</option>
+                        <option value="SELL">SELL</option>
+                    </select>
+                </div>
+                <input id="t-pnl" type="number" step="0.01" placeholder="Profit/Loss" required class="w-full bg-slate-800 rounded-lg p-3 text-white">
+                <button type="submit" class="w-full bg-blue-600 py-3 rounded-lg font-bold">Simpan</button>
+            </form>
+
+            <!-- List -->
+            <div id="trades-list">
+                <!-- Data trades akan muncul di sini -->
+            </div>
+        </main>
+    </section>
+
+</body>
+</html>
