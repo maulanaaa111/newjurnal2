@@ -45,6 +45,21 @@
             document.getElementById(id).classList.remove('hidden');
         }
 
+        // --- PASSWORD VISIBILITY LOGIC ---
+        window.togglePassword = () => {
+            const passInput = document.getElementById('password');
+            const toggleIcon = document.getElementById('toggle-icon');
+            
+            if (passInput.type === 'password') {
+                passInput.type = 'text';
+                toggleIcon.setAttribute('data-lucide', 'eye-off');
+            } else {
+                passInput.type = 'password';
+                toggleIcon.setAttribute('data-lucide', 'eye');
+            }
+            lucide.createIcons();
+        };
+
         // --- AUTH LOGIC ---
         window.handleAuth = async (mode) => {
             const email = document.getElementById('email').value;
@@ -236,7 +251,12 @@
                 </div>
                 <div>
                     <label class="text-xs font-bold text-slate-500 uppercase ml-1">Password</label>
-                    <input id="password" type="password" placeholder="••••••••" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white mt-1 focus:border-blue-500">
+                    <div class="relative mt-1">
+                        <input id="password" type="password" placeholder="••••••••" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 pr-10 text-white focus:border-blue-500">
+                        <button onclick="togglePassword()" class="absolute right-3 top-3 text-slate-500 hover:text-slate-300">
+                            <i id="toggle-icon" data-lucide="eye" class="w-5 h-5"></i>
+                        </button>
+                    </div>
                 </div>
                 <div class="pt-2 space-y-3">
                     <button onclick="handleAuth('login')" class="w-full bg-blue-600 hover:bg-blue-700 py-3 rounded-lg font-bold shadow-lg shadow-blue-900/20 transition-all">Masuk</button>
