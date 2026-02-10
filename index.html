@@ -12,16 +12,17 @@
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // --- GANTI DENGAN CONFIG FIREBASE ANDA ---
+        // --- KONFIGURASI FIREBASE ANDA ---
         const firebaseConfig = {
-          apiKey: "AIzaSyADD7hRJUGKdkuIiLZHK96wHSmz0FDMyWI",
-          authDomain: "jurnal-data-id.firebaseapp.com",
-          projectId: "jurnal-data-id",
-          storageBucket: "jurnal-data-id.firebasestorage.app",
-          messagingSenderId: "361080177174",
-          appId: "1:361080177174:web:4a532541bf366f5328ab37",
-          measurementId: "G-BL6H435904"
+            apiKey: "AIzaSyADD7hRJUGKdkuIiLZHK96wHSmz0FDMyWI",
+            authDomain: "jurnal-data-id.firebaseapp.com",
+            projectId: "jurnal-data-id",
+            storageBucket: "jurnal-data-id.firebasestorage.app",
+            messagingSenderId: "361080177174",
+            appId: "1:361080177174:web:4a532541bf366f5328ab37",
+            measurementId: "G-BL6H435904"
         };
+
         // Initialize Firebase
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -30,6 +31,7 @@
         // App State
         let currentUser = null;
         let accountData = null;
+        let unsubscribeTrades = null;
 
         // UI Elements
         const authSection = document.getElementById('auth-section');
@@ -47,13 +49,31 @@
         window.handleAuth = async (mode) => {
             const email = document.getElementById('email').value;
             const pass = document.getElementById('password').value;
+            
+            if(!email || !pass) {
+                alert("Harap isi email dan password");
+                return;
+            }
+
+            loadingOverlay.classList.remove('hidden');
             try {
-                if (mode === 'login') await signInWithEmailAndPassword(auth, email, pass);
-                else await createUserWithEmailAndPassword(auth, email, pass);
-            } catch (e) { alert("Error: " + e.message); }
+                if (mode === 'login') {
+                    await signInWithEmailAndPassword(auth, email, pass);
+                } else {
+                    await createUserWithEmailAndPassword(auth, email, pass);
+                    alert("Registrasi Berhasil! Silakan lengkapi profil akun Anda.");
+                }
+            } catch (e) { 
+                alert("Gagal: " + e.message); 
+            } finally {
+                loadingOverlay.classList.add('hidden');
+            }
         };
 
-        window.logout = () => signOut(auth);
+        window.logout = () => {
+            if(unsubscribeTrades) unsubscribeTrades();
+            signOut(auth);
+        };
 
         onAuthStateChanged(auth, async (user) => {
             loadingOverlay.classList.add('hidden');
@@ -61,30 +81,49 @@
                 currentUser = user;
                 checkAccount();
             } else {
+                currentUser = null;
+                accountData = null;
                 showSection('auth-section');
             }
         });
 
         // --- ACCOUNT LOGIC ---
         async function checkAccount() {
-            const docSnap = await getDoc(doc(db, "users", currentUser.uid, "settings", "account"));
-            if (docSnap.exists()) {
-                accountData = docSnap.data();
-                initJournal();
-            } else {
+            loadingOverlay.classList.remove('hidden');
+            try {
+                const docSnap = await getDoc(doc(db, "users", currentUser.uid, "settings", "account"));
+                if (docSnap.exists()) {
+                    accountData = docSnap.data();
+                    initJournal();
+                } else {
+                    showSection('account-section');
+                }
+            } catch (e) {
+                console.error(e);
                 showSection('account-section');
+            } finally {
+                loadingOverlay.classList.add('hidden');
             }
         }
 
         window.saveAccount = async (e) => {
             e.preventDefault();
+            loadingOverlay.classList.remove('hidden');
             const data = {
                 name: document.getElementById('acc-name').value,
                 balance: parseFloat(document.getElementById('acc-balance').value),
-                currency: document.getElementById('acc-currency').value
+                currency: document.getElementById('acc-currency').value,
+                createdAt: new Date().toISOString()
             };
-            await setDoc(doc(db, "users", currentUser.uid, "settings", "account"), data);
-            checkAccount();
+            try {
+                await setDoc(doc(db, "users", currentUser.uid, "settings", "account"), data);
+                accountData = data;
+                initJournal();
+            } catch (e) {
+                alert("Gagal menyimpan akun: " + e.message);
+            } finally {
+                loadingOverlay.classList.add('hidden');
+            }
         };
 
         // --- JOURNAL LOGIC ---
@@ -92,12 +131,17 @@
             showSection('journal-section');
             document.getElementById('display-acc-name').innerText = accountData.name;
             
+            // Bersihkan listener lama jika ada
+            if(unsubscribeTrades) unsubscribeTrades();
+
             // Listen Trades
-            const q = query(collection(db, "users", currentUser.uid, "trades"));
-            onSnapshot(q, (snapshot) => {
+            const q = query(collection(db, "users", currentUser.uid, "trades"), orderBy("date", "desc"));
+            unsubscribeTrades = onSnapshot(q, (snapshot) => {
                 const trades = [];
                 snapshot.forEach(doc => trades.push({id: doc.id, ...doc.data()}));
                 renderTrades(trades);
+            }, (error) => {
+                console.error("Firestore Error:", error);
             });
         }
 
@@ -109,34 +153,49 @@
                 pnl: parseFloat(document.getElementById('t-pnl').value),
                 date: new Date().toISOString()
             };
-            await addDoc(collection(db, "users", currentUser.uid, "trades"), trade);
-            e.target.reset();
+            try {
+                await addDoc(collection(db, "users", currentUser.uid, "trades"), trade);
+                e.target.reset();
+            } catch (e) {
+                alert("Gagal menambah data: " + e.message);
+            }
         };
 
         window.deleteTrade = async (id) => {
-            if(confirm("Hapus data ini?")) await deleteDoc(doc(db, "users", currentUser.uid, "trades", id));
+            if(confirm("Hapus data ini?")) {
+                try {
+                    await deleteDoc(doc(db, "users", currentUser.uid, "trades", id));
+                } catch (e) {
+                    alert("Gagal menghapus: " + e.message);
+                }
+            }
         };
 
         function renderTrades(trades) {
             const container = document.getElementById('trades-list');
             let totalPnL = 0;
-            container.innerHTML = trades.map(t => {
-                totalPnL += t.pnl;
-                return `
-                    <div class="bg-slate-800 p-4 rounded-xl flex justify-between items-center mb-3">
-                        <div>
-                            <p class="font-bold text-white">${t.pair} <span class="text-xs font-normal text-slate-400">${t.type}</span></p>
-                            <p class="text-xs text-slate-500">${new Date(t.date).toLocaleDateString()}</p>
+            
+            if (trades.length === 0) {
+                container.innerHTML = `<p class="text-center text-slate-500 py-10">Belum ada data trading.</p>`;
+            } else {
+                container.innerHTML = trades.map(t => {
+                    totalPnL += t.pnl;
+                    return `
+                        <div class="bg-slate-800 p-4 rounded-xl flex justify-between items-center mb-3 border border-slate-700/50">
+                            <div>
+                                <p class="font-bold text-white">${t.pair} <span class="text-xs font-normal ${t.type === 'BUY' ? 'text-blue-400' : 'text-orange-400'}">${t.type}</span></p>
+                                <p class="text-xs text-slate-500">${new Date(t.date).toLocaleString()}</p>
+                            </div>
+                            <div class="flex items-center gap-4">
+                                <span class="font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                                    ${t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString()}
+                                </span>
+                                <button onclick="deleteTrade('${t.id}')" class="text-slate-600 hover:text-rose-500 transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                            </div>
                         </div>
-                        <div class="flex items-center gap-4">
-                            <span class="font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
-                                ${t.pnl >= 0 ? '+' : ''}${t.pnl}
-                            </span>
-                            <button onclick="deleteTrade('${t.id}')" class="text-slate-600 hover:text-rose-500"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
-                        </div>
-                    </div>
-                `;
-            }).join('');
+                    `;
+                }).join('');
+            }
             
             document.getElementById('stat-pnl').innerText = totalPnL.toLocaleString();
             document.getElementById('stat-balance').innerText = (accountData.balance + totalPnL).toLocaleString();
@@ -146,85 +205,119 @@
         lucide.createIcons();
     </script>
     <style>
-        body { background-color: #020617; color: #f8fafc; font-family: sans-serif; }
+        body { background-color: #020617; color: #f8fafc; font-family: 'Inter', sans-serif; }
         .hidden { display: none; }
+        input, select, textarea { outline: none; transition: all 0.2s; }
+        input:focus { ring: 2px; ring-color: #3b82f6; }
     </style>
 </head>
 <body class="min-h-screen">
 
-    <div id="loading-overlay" class="fixed inset-0 bg-slate-950 flex items-center justify-center z-50">
-        <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-blue-500"></div>
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-50">
+        <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-blue-500 mb-4"></div>
+        <p class="text-slate-400 text-sm">Memproses data...</p>
     </div>
 
     <!-- 1. AUTH SECTION -->
-    <section id="auth-section" class="hidden min-h-screen flex items-center justify-center p-4">
+    <section id="auth-section" class="hidden min-h-screen flex items-center justify-center p-4 bg-slate-950">
         <div class="bg-slate-900 p-8 rounded-2xl border border-slate-800 w-full max-w-md shadow-2xl">
             <div class="text-center mb-8">
-                <div class="bg-blue-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"><i data-lucide="book-open" class="text-white"></i></div>
-                <h1 class="text-2xl font-bold">Trading Journal</h1>
-                <p class="text-slate-400">Masuk untuk melihat jurnal Anda</p>
+                <div class="bg-blue-600 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-blue-500/20">
+                    <i data-lucide="book-open" class="text-white w-8 h-8"></i>
+                </div>
+                <h1 class="text-2xl font-bold text-white">Trading Journal</h1>
+                <p class="text-slate-400 mt-2">Catat setiap trade, evaluasi hasil.</p>
             </div>
             <div class="space-y-4">
-                <input id="email" type="email" placeholder="Email" class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
-                <input id="password" type="password" placeholder="Password" class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
-                <button onclick="handleAuth('login')" class="w-full bg-blue-600 py-3 rounded-lg font-bold">Login</button>
-                <button onclick="handleAuth('register')" class="w-full text-blue-400 text-sm w-full text-center">Daftar Akun Baru</button>
+                <div>
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">Email</label>
+                    <input id="email" type="email" placeholder="nama@email.com" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white mt-1 focus:border-blue-500">
+                </div>
+                <div>
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">Password</label>
+                    <input id="password" type="password" placeholder="••••••••" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white mt-1 focus:border-blue-500">
+                </div>
+                <div class="pt-2 space-y-3">
+                    <button onclick="handleAuth('login')" class="w-full bg-blue-600 hover:bg-blue-700 py-3 rounded-lg font-bold shadow-lg shadow-blue-900/20 transition-all">Masuk</button>
+                    <button onclick="handleAuth('register')" class="w-full bg-slate-800 hover:bg-slate-700 text-white py-3 rounded-lg font-bold transition-all border border-slate-700">Daftar Akun Baru</button>
+                </div>
             </div>
         </div>
     </section>
 
     <!-- 2. ACCOUNT SETUP SECTION -->
     <section id="account-section" class="hidden min-h-screen flex items-center justify-center p-4">
-        <div class="bg-slate-900 p-8 rounded-2xl border border-slate-800 w-full max-w-md">
-            <h2 class="text-xl font-bold mb-6">Setup Akun Trading</h2>
+        <div class="bg-slate-900 p-8 rounded-2xl border border-slate-800 w-full max-w-md shadow-xl">
+            <h2 class="text-xl font-bold mb-2">Setup Profil Trading</h2>
+            <p class="text-slate-400 text-sm mb-6">Lengkapi data akun Anda untuk mulai menjurnal.</p>
             <form onsubmit="saveAccount(event)" class="space-y-4">
-                <input id="acc-name" placeholder="Nama Akun (ex: XM ECN)" required class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
-                <input id="acc-balance" type="number" placeholder="Modal Awal" required class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
-                <select id="acc-currency" class="w-full bg-slate-800 border-none rounded-lg p-3 text-white">
+                <input id="acc-name" placeholder="Nama Akun (ex: XM ECN / Personal)" required class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white">
+                <input id="acc-balance" type="number" step="0.01" placeholder="Modal Awal (Balance)" required class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white">
+                <select id="acc-currency" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 text-white">
                     <option value="USD">USD ($)</option>
                     <option value="IDR">IDR (Rp)</option>
                 </select>
-                <button type="submit" class="w-full bg-emerald-600 py-3 rounded-lg font-bold">Simpan & Mulai</button>
+                <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 py-3 rounded-lg font-bold shadow-lg shadow-emerald-900/20">Mulai Menjurnal</button>
+                <button type="button" onclick="logout()" class="w-full text-slate-500 text-sm">Batal / Keluar</button>
             </form>
         </div>
     </section>
 
     <!-- 3. JOURNAL MAIN SECTION -->
     <section id="journal-section" class="hidden">
-        <header class="bg-slate-900 p-4 border-b border-slate-800 flex justify-between items-center sticky top-0 z-10">
-            <h1 id="display-acc-name" class="font-bold">Journal</h1>
-            <button onclick="logout()" class="text-slate-400 hover:text-rose-500"><i data-lucide="log-out"></i></button>
+        <header class="bg-slate-900/80 backdrop-blur-md p-4 border-b border-slate-800 flex justify-between items-center sticky top-0 z-10">
+            <div class="flex items-center gap-3">
+                <div class="bg-blue-600 p-1.5 rounded-lg"><i data-lucide="layout" class="w-4 h-4 text-white"></i></div>
+                <h1 id="display-acc-name" class="font-bold text-white tracking-tight">Journal</h1>
+            </div>
+            <button onclick="logout()" class="p-2 text-slate-400 hover:text-rose-500 bg-slate-800 rounded-lg transition-colors"><i data-lucide="log-out" class="w-5 h-5"></i></button>
         </header>
 
-        <main class="max-w-4xl mx-auto p-4 space-y-6">
+        <main class="max-w-4xl mx-auto p-4 space-y-6 pb-20">
             <!-- Stats -->
             <div class="grid grid-cols-2 gap-4">
-                <div class="bg-slate-900 p-4 rounded-xl border border-slate-800">
-                    <p class="text-xs text-slate-500 uppercase font-bold">Current Balance</p>
-                    <p id="stat-balance" class="text-xl font-bold">0</p>
+                <div class="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-sm">
+                    <div class="flex items-center gap-2 mb-2 text-slate-500 uppercase text-[10px] font-black tracking-widest">
+                        <i data-lucide="wallet" class="w-3 h-3"></i> Current Balance
+                    </div>
+                    <p id="stat-balance" class="text-2xl font-bold text-white">0</p>
                 </div>
-                <div class="bg-slate-900 p-4 rounded-xl border border-slate-800">
-                    <p class="text-xs text-slate-500 uppercase font-bold">Total PnL</p>
-                    <p id="stat-pnl" class="text-xl font-bold">0</p>
+                <div class="bg-slate-900 p-5 rounded-2xl border border-slate-800 shadow-sm">
+                    <div class="flex items-center gap-2 mb-2 text-slate-500 uppercase text-[10px] font-black tracking-widest">
+                        <i data-lucide="trending-up" class="w-3 h-3"></i> Total PnL
+                    </div>
+                    <p id="stat-pnl" class="text-2xl font-bold text-white">0</p>
                 </div>
             </div>
 
             <!-- Form -->
-            <form onsubmit="addTrade(event)" class="bg-slate-900 p-6 rounded-2xl border border-slate-800 space-y-4">
-                <h3 class="font-bold mb-2">Input Trade</h3>
+            <form onsubmit="addTrade(event)" class="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-md space-y-4">
+                <div class="flex items-center gap-2 mb-2">
+                    <i data-lucide="plus-circle" class="w-4 h-4 text-blue-500"></i>
+                    <h3 class="font-bold text-white">Input Trade Baru</h3>
+                </div>
                 <div class="grid grid-cols-2 gap-3">
-                    <input id="t-pair" placeholder="Pair (ex: XAUUSD)" required class="bg-slate-800 rounded-lg p-3 text-white">
-                    <select id="t-type" class="bg-slate-800 rounded-lg p-3 text-white">
+                    <input id="t-pair" placeholder="Pair (ex: XAUUSD)" required class="bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500">
+                    <select id="t-type" class="bg-slate-800 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500">
                         <option value="BUY">BUY</option>
                         <option value="SELL">SELL</option>
                     </select>
                 </div>
-                <input id="t-pnl" type="number" step="0.01" placeholder="Profit/Loss" required class="w-full bg-slate-800 rounded-lg p-3 text-white">
-                <button type="submit" class="w-full bg-blue-600 py-3 rounded-lg font-bold">Simpan</button>
+                <div class="relative">
+                    <span class="absolute left-3 top-3 text-slate-500">$</span>
+                    <input id="t-pnl" type="number" step="0.01" placeholder="Profit / Loss (Gunakan minus untuk loss)" required class="w-full bg-slate-800 border border-slate-700 rounded-lg p-3 pl-7 text-white focus:border-blue-500">
+                </div>
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 py-3.5 rounded-xl font-bold shadow-lg shadow-blue-900/20 transition-all">Simpan Catatan</button>
             </form>
 
+            <!-- List Header -->
+            <div class="flex items-center justify-between px-1">
+                <h3 class="font-bold text-slate-400 text-sm uppercase tracking-wider">Riwayat Trading</h3>
+            </div>
+
             <!-- List -->
-            <div id="trades-list">
+            <div id="trades-list" class="space-y-3">
                 <!-- Data trades akan muncul di sini -->
             </div>
         </main>
