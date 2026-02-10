@@ -9,9 +9,10 @@
     <!-- Firebase SDK -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc, query, orderBy, writeBatch, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
+        // Konfigurasi Firebase Anda
         const firebaseConfig = {
             apiKey: "AIzaSyADD7hRJUGKdkuIiLZHK96wHSmz0FDMyWI",
             authDomain: "jurnal-data-id.firebaseapp.com",
@@ -22,6 +23,7 @@
             measurementId: "G-BL6H435904"
         };
 
+        // Inisialisasi Firebase
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
@@ -74,24 +76,51 @@
             lucide.createIcons();
         };
 
+        // Handle login/register dengan penanganan error kredensial
         window.handleAuth = async (mode) => {
             const email = getEl('email').value;
             const pass = getEl('password').value;
-            if(!email || !pass) return;
+            
+            if(!email || !pass) {
+                console.warn("Email dan password diperlukan.");
+                return;
+            }
+
             getEl('loading-overlay').classList.remove('hidden');
             try {
-                if (mode === 'login') await signInWithEmailAndPassword(auth, email, pass);
-                else {
+                if (mode === 'login') {
+                    await signInWithEmailAndPassword(auth, email, pass);
+                } else {
                     await createUserWithEmailAndPassword(auth, email, pass);
-                    alert("Registrasi Berhasil!");
                 }
-            } catch (e) { alert("Gagal: " + e.message); }
+            } catch (e) { 
+                console.error("Auth Error:", e.code, e.message);
+                // Jika kredensial salah, berikan feedback visual
+                const errorMsg = e.code === 'auth/invalid-credential' 
+                    ? "Email atau password salah. Cek kembali kredensial Anda." 
+                    : "Terjadi kesalahan saat login.";
+                
+                // Gunakan modal konfirmasi kustom untuk menampilkan error (sementara)
+                showConfirmModal(`<span class="text-rose-500 font-bold">Login Gagal</span><br><span class="text-[10px] text-slate-400">${errorMsg}</span>`, () => {});
+            }
             finally { getEl('loading-overlay').classList.add('hidden'); }
+        };
+
+        // Tambahan: Fitur login tamu (anonim) jika kredensial bermasalah
+        window.handleGuestLogin = async () => {
+            getEl('loading-overlay').classList.remove('hidden');
+            try {
+                await signInAnonymously(auth);
+            } catch (e) {
+                console.error("Guest Auth Error:", e.message);
+            } finally {
+                getEl('loading-overlay').classList.add('hidden');
+            }
         };
 
         window.logout = () => {
             if(unsubscribeTrades) unsubscribeTrades();
-            signOut(auth);
+            signOut(auth).catch(e => console.error("SignOut Error:", e));
         };
 
         onAuthStateChanged(auth, async (user) => {
@@ -115,7 +144,10 @@
                 } else {
                     showSection('account-section');
                 }
-            } catch (e) { showSection('account-section'); }
+            } catch (e) { 
+                console.error("Firestore Error:", e);
+                showSection('account-section'); 
+            }
             finally { getEl('loading-overlay').classList.add('hidden'); }
         }
 
@@ -132,7 +164,7 @@
                 await setDoc(doc(db, "users", currentUser.uid, "settings", "account"), data);
                 accountData = data;
                 startDataListener();
-            } catch (e) { alert("Gagal: " + e.message); }
+            } catch (e) { console.error("Save Account Error:", e.message); }
             finally { getEl('loading-overlay').classList.add('hidden'); }
         };
 
@@ -145,6 +177,8 @@
                 updateUI();
                 showSection('dashboard-section');
                 updateNavIcons('dashboard');
+            }, (error) => {
+                console.error("Trades Snapshot Error:", error);
             });
         }
 
@@ -152,15 +186,16 @@
             const navLinks = document.querySelectorAll('.nav-link');
             navLinks.forEach(link => {
                 const icon = link.querySelector('i');
-                if (icon) {
+                const span = link.querySelector('span');
+                if (icon && span) {
                     if (link.dataset.target === target) {
                         icon.classList.remove('text-slate-500');
                         icon.classList.add('text-blue-500');
-                        link.querySelector('span').classList.replace('text-slate-500', 'text-blue-500');
+                        span.classList.replace('text-slate-500', 'text-blue-500');
                     } else {
                         icon.classList.add('text-slate-500');
                         icon.classList.remove('text-blue-500');
-                        link.querySelector('span').classList.replace('text-blue-500', 'text-slate-500');
+                        span.classList.replace('text-blue-500', 'text-slate-500');
                     }
                 }
             });
@@ -191,10 +226,13 @@
             if(!container) return;
 
             if (allTrades.length === 0) {
-                container.innerHTML = `<p class="text-center text-slate-500 py-10">Belum ada data trading.</p>`;
+                container.innerHTML = `<div class="text-center py-12 bg-slate-900/40 rounded-3xl border border-dashed border-slate-800">
+                    <i data-lucide="layers" class="w-8 h-8 text-slate-700 mx-auto mb-3"></i>
+                    <p class="text-slate-500 text-xs font-bold uppercase tracking-widest">Belum ada aktivitas</p>
+                </div>`;
             } else {
                 container.innerHTML = allTrades.map(t => `
-                    <div class="bg-slate-900/60 p-5 rounded-2xl mb-4 border border-slate-800 shadow-sm">
+                    <div class="bg-slate-900/60 p-5 rounded-2xl mb-4 border border-slate-800 shadow-sm relative group overflow-hidden">
                         <div class="flex justify-between items-start mb-3">
                             <div class="flex items-center gap-3">
                                 <div class="w-10 h-10 rounded-xl flex items-center justify-center ${t.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}">
@@ -210,7 +248,7 @@
                             </div>
                             <div class="text-right flex flex-col items-end">
                                 <p class="font-black text-base leading-tight ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString()}</p>
-                                <button onclick="deleteTrade('${t.id}')" class="p-1 text-slate-600 hover:text-rose-500 transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                <button onclick="deleteTrade('${t.id}')" class="mt-2 p-1.5 text-slate-600 hover:text-rose-500 transition-colors bg-slate-950/50 rounded-lg"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
                             </div>
                         </div>
                         <div class="grid grid-cols-2 gap-3 pt-3 border-t border-slate-800/50">
@@ -245,15 +283,47 @@
                 await addDoc(collection(db, "users", currentUser.uid, "trades"), trade);
                 e.target.reset();
                 navigateTo('dashboard');
-            } catch (e) { alert("Gagal: " + e.message); }
+            } catch (e) { console.error("Add Trade Error:", e.message); }
         };
 
-        window.deleteTrade = async (id) => {
-            if(confirm("Hapus trade ini?")) {
+        window.deleteTrade = (id) => {
+            showConfirmModal("Hapus trade ini?", async () => {
                 try { await deleteDoc(doc(db, "users", currentUser.uid, "trades", id)); }
-                catch (e) { alert("Gagal: " + e.message); }
-            }
+                catch (e) { console.error("Delete Trade Error:", e.message); }
+            });
         };
+
+        window.deleteAllTrades = () => {
+            showConfirmModal("⚠️ HAPUS SEMUA DATA?<br><span class='text-[10px] text-rose-500'>Tindakan ini tidak bisa dibatalkan. Cocok untuk reset backtest.</span>", async () => {
+                getEl('loading-overlay').classList.remove('hidden');
+                try {
+                    const tradesCol = collection(db, "users", currentUser.uid, "trades");
+                    const snapshot = await getDocs(tradesCol);
+                    const batch = writeBatch(db);
+                    snapshot.forEach((doc) => batch.delete(doc.ref));
+                    await batch.commit();
+                } catch (e) { console.error("Delete All Error:", e.message); }
+                finally { getEl('loading-overlay').classList.add('hidden'); hideConfirmModal(); }
+            });
+        };
+
+        // --- CUSTOM CONFIRM MODAL ---
+        let confirmAction = null;
+        function showConfirmModal(msg, action) {
+            getEl('modal-msg').innerHTML = msg;
+            getEl('confirm-modal').classList.remove('hidden');
+            getEl('confirm-modal').classList.add('flex');
+            confirmAction = action;
+        }
+        window.hideConfirmModal = () => {
+            getEl('confirm-modal').classList.add('hidden');
+            getEl('confirm-modal').classList.remove('flex');
+            confirmAction = null;
+        }
+        window.executeConfirm = () => {
+            if(confirmAction && typeof confirmAction === 'function') confirmAction();
+            hideConfirmModal();
+        }
 
         // --- CALENDAR LOGIC ---
         window.changeMonth = (val) => {
@@ -272,11 +342,9 @@
             
             monthLabel.innerText = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(currentCalendarDate);
 
-            // Get first day of month and last day of month
             const firstDay = new Date(year, month, 1).getDay();
             const lastDate = new Date(year, month + 1, 0).getDate();
 
-            // PnL by Date Map
             const pnlByDate = {};
             allTrades.forEach(t => {
                 const tDate = new Date(t.date);
@@ -286,12 +354,10 @@
                 }
             });
 
-            // Blank spaces for first week
             for(let i = 0; i < firstDay; i++) {
                 container.innerHTML += `<div class="aspect-square"></div>`;
             }
 
-            // Days of month
             for(let day = 1; day <= lastDate; day++) {
                 const hasPnL = pnlByDate[day] !== undefined;
                 const pnl = pnlByDate[day] || 0;
@@ -299,9 +365,9 @@
                 const bgClass = hasPnL ? (pnl > 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20') : 'bg-slate-900/40 border-slate-800/50';
 
                 container.innerHTML += `
-                    <div class="aspect-square flex flex-col items-center justify-center rounded-xl border ${bgClass} p-1 transition-all hover:scale-105">
+                    <div class="aspect-square flex flex-col items-center justify-center rounded-xl border ${bgClass} p-1 transition-all">
                         <span class="text-[10px] font-bold text-slate-500">${day}</span>
-                        ${hasPnL ? `<span class="text-[8px] font-black ${pnlClass} truncate w-full text-center">${pnl > 0 ? '+' : ''}${pnl.toLocaleString()}</span>` : ''}
+                        ${hasPnL ? `<span class="text-[7px] font-black ${pnlClass} truncate w-full text-center tracking-tighter">${pnl > 0 ? '+' : ''}${Math.round(pnl).toLocaleString()}</span>` : ''}
                     </div>
                 `;
             }
@@ -319,11 +385,24 @@
         input, select, textarea { outline: none; background: #0f172a; border: 1px solid #1e293b; border-radius: 1rem; padding: 0.85rem 1rem; color: #f1f5f9; width: 100%; font-size: 0.85rem; transition: all 0.2s; }
         input:focus { border-color: #3b82f6; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1); }
         .nav-link { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-        .nav-link:active { transform: translateY(-2px); }
         input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.5; }
     </style>
 </head>
 <body class="min-h-screen pb-32">
+
+    <!-- Confirmation Modal (Custom UI) -->
+    <div id="confirm-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] items-center justify-center p-6">
+        <div class="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] w-full max-w-xs shadow-2xl text-center space-y-6">
+            <div class="w-16 h-16 bg-rose-500/10 text-rose-500 rounded-2xl flex items-center justify-center mx-auto">
+                <i data-lucide="alert-triangle" class="w-8 h-8"></i>
+            </div>
+            <p id="modal-msg" class="text-sm font-bold text-white uppercase tracking-tight"></p>
+            <div class="flex flex-col gap-3">
+                <button onclick="executeConfirm()" class="w-full bg-rose-600 py-3 rounded-xl font-black text-white text-xs uppercase tracking-widest">Ya, Lanjutkan</button>
+                <button onclick="hideConfirmModal()" class="w-full bg-slate-800 py-3 rounded-xl font-black text-slate-400 text-xs uppercase tracking-widest">Batal</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Loading Overlay -->
     <div id="loading-overlay" class="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-[100]">
@@ -331,7 +410,6 @@
             <div class="h-16 w-16 rounded-full border-t-4 border-blue-500 animate-spin"></div>
             <div class="absolute inset-0 flex items-center justify-center"><i data-lucide="zap" class="w-6 h-6 text-blue-500"></i></div>
         </div>
-        <p class="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] mt-6">Initializing Engine</p>
     </div>
 
     <!-- 1. AUTH SECTION -->
@@ -341,8 +419,8 @@
                 <div class="bg-blue-600 w-20 h-20 rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-2xl shadow-blue-500/40 rotate-12">
                     <i data-lucide="trending-up" class="text-white w-10 h-10 -rotate-12"></i>
                 </div>
-                <h1 class="text-3xl font-black tracking-tighter text-white uppercase italic italic">Journal Pro</h1>
-                <p class="text-slate-500 text-xs font-bold uppercase tracking-widest mt-2">Professional Trading Suite</p>
+                <h1 class="text-3xl font-black tracking-tighter text-white uppercase italic">Journal Pro</h1>
+                <p class="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em] mt-2">Professional Trading Suite</p>
             </div>
             <div class="space-y-4">
                 <input id="email" type="email" placeholder="Email Address">
@@ -351,7 +429,13 @@
                     <button onclick="togglePassword()" class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500"><i id="toggle-icon" data-lucide="eye" class="w-5 h-5"></i></button>
                 </div>
                 <button onclick="handleAuth('login')" class="w-full bg-blue-600 py-4 rounded-2xl font-black text-white shadow-xl shadow-blue-600/30">LOGIN SYSTEM</button>
-                <button onclick="handleAuth('register')" class="w-full text-slate-500 text-[10px] font-black tracking-[0.2em] uppercase">Create Identity</button>
+                <button onclick="handleAuth('register')" class="w-full text-slate-500 text-[10px] font-black tracking-[0.2em] uppercase">Create New Identity</button>
+                <div class="relative py-2 flex items-center">
+                    <div class="flex-grow border-t border-slate-800"></div>
+                    <span class="flex-shrink mx-4 text-slate-700 text-[9px] font-black uppercase">OR</span>
+                    <div class="flex-grow border-t border-slate-800"></div>
+                </div>
+                <button onclick="handleGuestLogin()" class="w-full bg-slate-900 border border-slate-800 py-3 rounded-2xl font-black text-slate-400 text-[10px] uppercase tracking-widest hover:bg-slate-800 transition-colors">Start Backtest as Guest</button>
             </div>
         </div>
     </section>
@@ -363,7 +447,7 @@
             <form onsubmit="saveAccount(event)" class="space-y-5">
                 <div class="space-y-2">
                     <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Master Account Name</label>
-                    <input id="acc-name" placeholder="ex: Funded Account #1" required>
+                    <input id="acc-name" placeholder="ex: Backtest Mode" required>
                 </div>
                 <div class="space-y-2">
                     <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Base Capital</label>
@@ -376,28 +460,30 @@
                         <option value="IDR">Rupiah (Rp)</option>
                     </select>
                 </div>
-                <button type="submit" class="w-full bg-emerald-600 py-4 rounded-2xl font-black mt-4 shadow-xl shadow-emerald-600/20">ACTIVATE CORE</button>
+                <button type="submit" class="w-full bg-emerald-600 py-4 rounded-2xl font-black mt-4 shadow-xl shadow-emerald-600/20 uppercase tracking-widest">ACTIVATE CORE</button>
             </form>
         </div>
     </section>
 
     <!-- 3. DASHBOARD SECTION -->
     <section id="dashboard-section" class="hidden p-6 max-w-2xl mx-auto space-y-8 animate-in fade-in duration-500">
-        <div class="flex justify-between items-end">
+        <div class="flex justify-between items-center">
             <div>
                 <p class="text-blue-500 text-[10px] font-black uppercase tracking-[0.3em] mb-1">Active Portfolio</p>
                 <h1 id="display-acc-name" class="text-2xl font-black text-white uppercase italic tracking-tight">DASHBOARD</h1>
             </div>
-            <button onclick="logout()" class="w-12 h-12 flex items-center justify-center bg-slate-900 border border-slate-800 rounded-2xl text-rose-500 active:scale-90"><i data-lucide="log-out" class="w-5 h-5"></i></button>
+            <div class="flex gap-2">
+                <button onclick="logout()" class="w-12 h-12 flex items-center justify-center bg-slate-900 border border-slate-800 rounded-2xl text-slate-500 active:scale-90"><i data-lucide="log-out" class="w-5 h-5"></i></button>
+            </div>
         </div>
 
-        <div class="bg-gradient-to-br from-blue-700 to-indigo-900 p-8 rounded-[2.5rem] shadow-2xl shadow-blue-900/40 text-white relative overflow-hidden border border-white/5">
+        <div class="bg-gradient-to-br from-slate-800 to-slate-950 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden border border-white/5">
             <div class="relative z-10">
-                <p class="text-white/40 text-[10px] font-black uppercase tracking-widest mb-2 flex items-center gap-2"><i data-lucide="shield-check" class="w-3 h-3"></i> Security Equity</p>
+                <p class="text-white/40 text-[10px] font-black uppercase tracking-widest mb-2">Total Equity Balance</p>
                 <h2 class="text-5xl font-black mb-10 tracking-tighter"><span class="text-2xl opacity-40 font-medium mr-1">$</span><span class="val-balance">0</span></h2>
                 <div class="flex gap-12">
                     <div class="space-y-1">
-                        <p class="text-white/30 text-[9px] font-black uppercase tracking-widest">Growth Index</p>
+                        <p class="text-white/30 text-[9px] font-black uppercase tracking-widest">Acc. Performance</p>
                         <p class="val-pnl">+0</p>
                     </div>
                     <div class="space-y-1">
@@ -406,29 +492,30 @@
                     </div>
                 </div>
             </div>
-            <i data-lucide="activity" class="absolute -right-4 -bottom-4 w-48 h-48 text-white opacity-5 rotate-12"></i>
         </div>
 
         <div class="grid grid-cols-2 gap-4">
             <div class="bg-slate-900/50 border border-slate-800 p-6 rounded-3xl text-center">
-                <p class="text-slate-500 text-[10px] font-black uppercase mb-1 tracking-widest">Volume</p>
+                <p class="text-slate-500 text-[10px] font-black uppercase mb-1 tracking-widest">Total Trade</p>
                 <p id="val-total-trades" class="text-2xl font-black">0</p>
             </div>
-            <div class="bg-slate-900/50 border border-slate-800 p-6 rounded-3xl text-center">
-                <p class="text-slate-500 text-[10px] font-black uppercase mb-1 tracking-widest">Status</p>
-                <p class="text-2xl font-black text-emerald-500 uppercase italic">Active</p>
+            <div class="bg-slate-900/50 border border-slate-800 p-6 rounded-3xl text-center overflow-hidden">
+                 <p class="text-slate-500 text-[10px] font-black uppercase mb-1 tracking-widest">Reset System</p>
+                 <button onclick="deleteAllTrades()" class="text-rose-500 flex items-center justify-center gap-2 mx-auto font-black text-xs uppercase tracking-widest mt-1">
+                    <i data-lucide="refresh-ccw" class="w-3.5 h-3.5"></i> Clear All
+                 </button>
             </div>
         </div>
 
-        <button onclick="navigateTo('journal')" class="w-full bg-slate-900 border border-slate-800 p-6 rounded-3xl flex items-center justify-between group active:scale-[0.98] transition-all">
+        <button onclick="navigateTo('journal')" class="w-full bg-blue-600 p-6 rounded-3xl flex items-center justify-between group active:scale-[0.98] transition-all shadow-xl shadow-blue-600/20">
             <div class="flex items-center gap-5">
-                <div class="bg-blue-600 w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-600/20 group-hover:scale-110 transition-transform"><i data-lucide="plus" class="w-6 h-6 text-white"></i></div>
+                <div class="bg-white/20 w-12 h-12 rounded-2xl flex items-center justify-center"><i data-lucide="plus" class="w-6 h-6 text-white"></i></div>
                 <div class="text-left">
-                    <span class="block font-black text-white text-lg tracking-tight">LOG NEW TRADE</span>
-                    <span class="text-[9px] font-bold text-slate-500 uppercase tracking-widest italic">Append to ledger</span>
+                    <span class="block font-black text-white text-lg tracking-tight uppercase italic">Add New Trade</span>
+                    <span class="text-[9px] font-bold text-white/50 uppercase tracking-widest">Open journal ledger</span>
                 </div>
             </div>
-            <i data-lucide="chevron-right" class="w-6 h-6 text-slate-700"></i>
+            <i data-lucide="arrow-right" class="w-6 h-6 text-white/40"></i>
         </button>
     </section>
 
@@ -436,12 +523,12 @@
     <section id="recap-section" class="hidden p-6 max-w-2xl mx-auto space-y-8 animate-in slide-in-from-bottom-8 duration-500">
         <div class="flex items-center justify-between pt-2">
             <div>
-                <p class="text-emerald-500 text-[10px] font-black uppercase tracking-[0.3em] mb-1">Performance</p>
-                <h2 class="text-2xl font-black tracking-tight uppercase italic">TRADE RECAP</h2>
+                <p class="text-emerald-500 text-[10px] font-black uppercase tracking-[0.3em] mb-1">Performance Recap</p>
+                <h2 class="text-2xl font-black tracking-tight uppercase italic">TRADING CALENDAR</h2>
             </div>
             <div class="flex items-center gap-2 bg-slate-900 p-2 rounded-2xl border border-slate-800">
                 <button onclick="changeMonth(-1)" class="p-2 text-slate-400 hover:text-white"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
-                <span id="current-month-label" class="text-[10px] font-black uppercase tracking-widest w-32 text-center">MONTH 2024</span>
+                <span id="current-month-label" class="text-[10px] font-black uppercase tracking-widest w-32 text-center text-slate-300">MONTH 2024</span>
                 <button onclick="changeMonth(1)" class="p-2 text-slate-400 hover:text-white"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
             </div>
         </div>
@@ -456,62 +543,54 @@
                 <div class="text-center text-[9px] font-black text-slate-600 uppercase">Jum</div>
                 <div class="text-center text-[9px] font-black text-slate-600 uppercase">Sab</div>
             </div>
-            <div id="calendar-grid" class="grid grid-cols-7 gap-2">
-                <!-- Kalender diisi via JS -->
-            </div>
-        </div>
-
-        <div class="bg-slate-900/30 p-4 rounded-2xl border border-slate-800/50 flex items-center gap-4">
-            <div class="p-3 rounded-xl bg-blue-500/10 text-blue-500"><i data-lucide="info" class="w-5 h-5"></i></div>
-            <p class="text-[11px] text-slate-500 leading-relaxed"><span class="text-white font-bold">Pro Tip:</span> Gunakan kalender ini untuk mengevaluasi hari-hari merah Anda. Konsistensi lebih penting daripada besarnya profit harian.</p>
+            <div id="calendar-grid" class="grid grid-cols-7 gap-2"></div>
         </div>
     </section>
 
     <!-- 5. JOURNAL SECTION -->
     <section id="journal-section" class="hidden p-6 max-w-2xl mx-auto space-y-10 animate-in slide-in-from-right-8 duration-500">
-        <h2 class="text-2xl font-black tracking-tight uppercase italic pt-2">JOURNAL ENTRY</h2>
+        <h2 class="text-2xl font-black tracking-tight uppercase italic pt-2">TRADE LOGS</h2>
         
         <form onsubmit="addTrade(event)" class="bg-slate-950 p-8 rounded-[2.5rem] border border-slate-800 shadow-2xl space-y-6">
             <div class="space-y-2">
-                <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest flex items-center gap-2"><i data-lucide="calendar-plus" class="w-3.5 h-3.5"></i> Execution Timestamp</label>
+                <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest flex items-center gap-2"><i data-lucide="calendar" class="w-3.5 h-3.5"></i> Execution Time</label>
                 <input id="t-date" type="datetime-local" required>
             </div>
-            
             <div class="grid grid-cols-2 gap-5">
                 <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest flex items-center gap-2"><i data-lucide="box" class="w-3.5 h-3.5"></i> Asset Pair</label>
-                    <input id="t-pair" placeholder="ex: XAUUSD" required>
+                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Asset Pair</label>
+                    <input id="t-pair" placeholder="XAUUSD" required>
                 </div>
                 <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest flex items-center gap-2"><i data-lucide="git-branch" class="w-3.5 h-3.5"></i> Direction</label>
+                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Direction</label>
                     <select id="t-type">
                         <option value="BUY">BUY / LONG</option>
                         <option value="SELL">SELL / SHORT</option>
                     </select>
                 </div>
             </div>
-
             <div class="grid grid-cols-2 gap-5">
                 <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest flex items-center gap-2"><i data-lucide="log-in" class="w-3.5 h-3.5"></i> Entry</label>
-                    <input id="t-entry" type="number" step="0.00001" placeholder="0.000">
+                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Entry</label>
+                    <input id="t-entry" type="number" step="0.00001" placeholder="0.00">
                 </div>
                 <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest flex items-center gap-2"><i data-lucide="log-out" class="w-3.5 h-3.5"></i> Exit</label>
-                    <input id="t-exit" type="number" step="0.00001" placeholder="0.000">
+                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Exit</label>
+                    <input id="t-exit" type="number" step="0.00001" placeholder="0.00">
                 </div>
             </div>
-
             <div class="space-y-2">
-                <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest flex items-center gap-2"><i data-lucide="dollar-sign" class="w-3.5 h-3.5"></i> Net Profit / Loss</label>
-                <input id="t-pnl" type="number" step="0.01" placeholder="Use minus for Loss" required>
+                <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Net Profit / Loss (PnL)</label>
+                <input id="t-pnl" type="number" step="0.01" placeholder="0.00" required>
             </div>
-
-            <button type="submit" class="w-full bg-blue-600 py-4 rounded-2xl font-black uppercase tracking-[0.2em] shadow-xl shadow-blue-600/30 active:scale-95 transition-all">COMMIT TO JOURNAL</button>
+            <button type="submit" class="w-full bg-blue-600 py-4 rounded-2xl font-black uppercase tracking-[0.2em] shadow-xl shadow-blue-600/30">Commit Trade</button>
         </form>
 
         <div class="space-y-6">
-            <h3 class="text-[11px] font-black text-blue-500 uppercase tracking-[0.3em] px-2">RECENT TRADES</h3>
+            <div class="flex justify-between items-center px-2">
+                <h3 class="text-[11px] font-black text-blue-500 uppercase tracking-[0.3em]">HISTORY</h3>
+                <button onclick="deleteAllTrades()" class="text-[9px] font-black text-rose-500 uppercase tracking-widest">Clear List</button>
+            </div>
             <div id="trades-list"></div>
         </div>
     </section>
@@ -528,7 +607,7 @@
         </button>
         <button onclick="navigateTo('journal')" data-target="journal" class="nav-link flex-1 flex flex-col items-center gap-1.5 py-4 rounded-[2rem]">
             <i data-lucide="book-open" class="w-5 h-5 text-slate-500 transition-colors"></i>
-            <span class="text-[9px] font-black uppercase tracking-widest text-slate-500">Journal</span>
+            <span class="text-[9px] font-black uppercase tracking-widest text-slate-500">Logs</span>
         </button>
     </nav>
 
