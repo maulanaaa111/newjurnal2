@@ -6,13 +6,11 @@
     <title>Trading Journal Pro</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Firebase SDK -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc, query, orderBy, writeBatch, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // Konfigurasi Firebase Anda
         const firebaseConfig = {
             apiKey: "AIzaSyADD7hRJUGKdkuIiLZHK96wHSmz0FDMyWI",
             authDomain: "jurnal-data-id.firebaseapp.com",
@@ -23,7 +21,6 @@
             measurementId: "G-BL6H435904"
         };
 
-        // Inisialisasi Firebase
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
@@ -35,6 +32,27 @@
         let currentCalendarDate = new Date();
 
         const getEl = (id) => document.getElementById(id);
+
+        // --- Auth Toggle & Password Visibility ---
+        window.toggleAuthMode = () => {
+            const isLogin = getEl('auth-title').innerText === 'LOGIN';
+            getEl('auth-title').innerText = isLogin ? 'REGISTER' : 'LOGIN';
+            getEl('auth-submit-btn').innerText = isLogin ? 'BUAT AKUN' : 'MASUK';
+            getEl('auth-toggle-text').innerText = isLogin ? 'Sudah punya akun? Login' : 'Belum punya akun? Daftar';
+        };
+
+        window.togglePassword = (id, iconId) => {
+            const input = getEl(id);
+            const icon = getEl(iconId);
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.setAttribute('data-lucide', 'eye-off');
+            } else {
+                input.type = 'password';
+                icon.setAttribute('data-lucide', 'eye');
+            }
+            lucide.createIcons();
+        };
 
         function showSection(id) {
             const sectionIds = ['auth-section', 'account-section', 'dashboard-section', 'journal-section', 'recap-section'];
@@ -63,75 +81,40 @@
             if (dateInput) dateInput.value = now.toISOString().slice(0, 16);
         }
 
-        window.togglePassword = () => {
-            const passInput = getEl('password');
-            const toggleIcon = getEl('toggle-icon');
-            if (passInput.type === 'password') {
-                passInput.type = 'text';
-                toggleIcon.setAttribute('data-lucide', 'eye-off');
-            } else {
-                passInput.type = 'password';
-                toggleIcon.setAttribute('data-lucide', 'eye');
-            }
-            lucide.createIcons();
-        };
-
-        // Handle login/register dengan penanganan error kredensial
-        window.handleAuth = async (mode) => {
+        window.handleAuth = async () => {
             const email = getEl('email').value;
             const pass = getEl('password').value;
-            
-            if(!email || !pass) {
-                console.warn("Email dan password diperlukan.");
-                return;
-            }
+            const isLogin = getEl('auth-title').innerText === 'LOGIN';
+            if(!email || !pass) return;
 
             getEl('loading-overlay').classList.remove('hidden');
             try {
-                if (mode === 'login') {
-                    await signInWithEmailAndPassword(auth, email, pass);
-                } else {
-                    await createUserWithEmailAndPassword(auth, email, pass);
-                }
+                if (isLogin) await signInWithEmailAndPassword(auth, email, pass);
+                else await createUserWithEmailAndPassword(auth, email, pass);
             } catch (e) { 
-                console.error("Auth Error:", e.code, e.message);
-                // Jika kredensial salah, berikan feedback visual
-                const errorMsg = e.code === 'auth/invalid-credential' 
-                    ? "Email atau password salah. Cek kembali kredensial Anda." 
-                    : "Terjadi kesalahan saat login.";
-                
-                // Gunakan modal konfirmasi kustom untuk menampilkan error (sementara)
-                showConfirmModal(`<span class="text-rose-500 font-bold">Login Gagal</span><br><span class="text-[10px] text-slate-400">${errorMsg}</span>`, () => {});
-            }
-            finally { getEl('loading-overlay').classList.add('hidden'); }
+                let errorMsg = "Terjadi kesalahan.";
+                if (e.code === 'auth/invalid-credential') errorMsg = "Email atau password salah.";
+                if (e.code === 'auth/email-already-in-use') errorMsg = "Email sudah terdaftar.";
+                showConfirmModal(`<span class="text-rose-500 font-bold">Gagal</span><br><span class="text-[10px]">${errorMsg}</span>`, () => {});
+            } finally { getEl('loading-overlay').classList.add('hidden'); }
         };
 
-        // Tambahan: Fitur login tamu (anonim) jika kredensial bermasalah
         window.handleGuestLogin = async () => {
             getEl('loading-overlay').classList.remove('hidden');
-            try {
-                await signInAnonymously(auth);
-            } catch (e) {
-                console.error("Guest Auth Error:", e.message);
-            } finally {
-                getEl('loading-overlay').classList.add('hidden');
-            }
+            try { await signInAnonymously(auth); } 
+            catch (e) { console.error(e); } 
+            finally { getEl('loading-overlay').classList.add('hidden'); }
         };
 
         window.logout = () => {
             if(unsubscribeTrades) unsubscribeTrades();
-            signOut(auth).catch(e => console.error("SignOut Error:", e));
+            signOut(auth);
         };
 
         onAuthStateChanged(auth, async (user) => {
             getEl('loading-overlay').classList.add('hidden');
-            if (user) {
-                currentUser = user;
-                checkAccount();
-            } else {
-                currentUser = null;
-                showSection('auth-section');
-            }
+            if (user) { currentUser = user; checkAccount(); } 
+            else { currentUser = null; showSection('auth-section'); }
         });
 
         async function checkAccount() {
@@ -141,13 +124,8 @@
                 if (docSnap.exists()) {
                     accountData = docSnap.data();
                     startDataListener();
-                } else {
-                    showSection('account-section');
-                }
-            } catch (e) { 
-                console.error("Firestore Error:", e);
-                showSection('account-section'); 
-            }
+                } else { showSection('account-section'); }
+            } catch (e) { showSection('account-section'); }
             finally { getEl('loading-overlay').classList.add('hidden'); }
         }
 
@@ -164,7 +142,7 @@
                 await setDoc(doc(db, "users", currentUser.uid, "settings", "account"), data);
                 accountData = data;
                 startDataListener();
-            } catch (e) { console.error("Save Account Error:", e.message); }
+            } catch (e) { console.error(e); }
             finally { getEl('loading-overlay').classList.add('hidden'); }
         };
 
@@ -177,9 +155,7 @@
                 updateUI();
                 showSection('dashboard-section');
                 updateNavIcons('dashboard');
-            }, (error) => {
-                console.error("Trades Snapshot Error:", error);
-            });
+            }, (error) => console.error(error));
         }
 
         function updateNavIcons(target) {
@@ -187,17 +163,9 @@
             navLinks.forEach(link => {
                 const icon = link.querySelector('i');
                 const span = link.querySelector('span');
-                if (icon && span) {
-                    if (link.dataset.target === target) {
-                        icon.classList.remove('text-slate-500');
-                        icon.classList.add('text-blue-500');
-                        span.classList.replace('text-slate-500', 'text-blue-500');
-                    } else {
-                        icon.classList.add('text-slate-500');
-                        icon.classList.remove('text-blue-500');
-                        span.classList.replace('text-blue-500', 'text-slate-500');
-                    }
-                }
+                const isActive = link.dataset.target === target;
+                if (icon) icon.className = `w-5 h-5 transition-all ${isActive ? 'text-blue-400 scale-110' : 'text-slate-500'}`;
+                if (span) span.className = `text-[8px] font-black uppercase tracking-widest transition-all ${isActive ? 'text-blue-400 opacity-100' : 'text-slate-500 opacity-60'}`;
             });
         }
 
@@ -212,9 +180,9 @@
             const wins = allTrades.filter(t => t.pnl > 0).length;
             const winRate = allTrades.length > 0 ? ((wins / allTrades.length) * 100).toFixed(1) : 0;
 
-            document.querySelectorAll('.val-balance').forEach(el => el.innerText = currentBalance.toLocaleString());
+            document.querySelectorAll('.val-balance').forEach(el => el.innerText = currentBalance.toLocaleString('id-ID'));
             document.querySelectorAll('.val-pnl').forEach(el => {
-                el.innerText = (totalPnL >= 0 ? '+' : '') + totalPnL.toLocaleString();
+                el.innerText = (totalPnL >= 0 ? '+' : '') + totalPnL.toLocaleString('id-ID');
                 el.className = `val-pnl font-black text-xl ${totalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
             });
             
@@ -226,39 +194,23 @@
             if(!container) return;
 
             if (allTrades.length === 0) {
-                container.innerHTML = `<div class="text-center py-12 bg-slate-900/40 rounded-3xl border border-dashed border-slate-800">
-                    <i data-lucide="layers" class="w-8 h-8 text-slate-700 mx-auto mb-3"></i>
-                    <p class="text-slate-500 text-xs font-bold uppercase tracking-widest">Belum ada aktivitas</p>
-                </div>`;
+                container.innerHTML = `<div class="text-center py-12 bg-white/5 rounded-3xl border border-dashed border-white/10"><p class="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Belum ada aktivitas</p></div>`;
             } else {
                 container.innerHTML = allTrades.map(t => `
-                    <div class="bg-slate-900/60 p-5 rounded-2xl mb-4 border border-slate-800 shadow-sm relative group overflow-hidden">
-                        <div class="flex justify-between items-start mb-3">
+                    <div class="bg-white/5 p-4 rounded-2xl mb-3 border border-white/5 hover:border-white/10 transition-all">
+                        <div class="flex justify-between items-center">
                             <div class="flex items-center gap-3">
                                 <div class="w-10 h-10 rounded-xl flex items-center justify-center ${t.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}">
                                     <i data-lucide="${t.pnl >= 0 ? 'trending-up' : 'trending-down'}" class="w-5 h-5"></i>
                                 </div>
                                 <div>
-                                    <p class="font-bold text-white text-sm tracking-tight">${t.pair} <span class="text-[9px] ml-1.5 px-1.5 py-0.5 rounded font-black uppercase ${t.type === 'BUY' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400'}">${t.type}</span></p>
-                                    <div class="flex items-center gap-1.5 text-slate-500 mt-0.5">
-                                        <i data-lucide="calendar" class="w-3 h-3"></i>
-                                        <p class="text-[10px] font-medium">${new Date(t.date).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}</p>
-                                    </div>
+                                    <p class="font-bold text-white text-sm">${t.pair} <span class="text-[8px] ml-1 px-1.5 py-0.5 rounded font-black ${t.type === 'BUY' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400'}">${t.type}</span></p>
+                                    <p class="text-[9px] text-slate-500">${new Date(t.date).toLocaleString('id-ID', {dateStyle:'medium', timeStyle:'short'})}</p>
                                 </div>
                             </div>
-                            <div class="text-right flex flex-col items-end">
-                                <p class="font-black text-base leading-tight ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString()}</p>
-                                <button onclick="deleteTrade('${t.id}')" class="mt-2 p-1.5 text-slate-600 hover:text-rose-500 transition-colors bg-slate-950/50 rounded-lg"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
-                            </div>
-                        </div>
-                        <div class="grid grid-cols-2 gap-3 pt-3 border-t border-slate-800/50">
-                            <div class="flex items-center gap-2 bg-slate-950/40 p-2 rounded-lg">
-                                <i data-lucide="arrow-right-circle" class="w-3 h-3 text-slate-500"></i>
-                                <div><p class="text-[9px] text-slate-500 leading-none mb-0.5 font-bold">ENTRY</p><p class="text-[11px] text-slate-300 font-mono font-bold">${t.entry || '-'}</p></div>
-                            </div>
-                            <div class="flex items-center gap-2 bg-slate-950/40 p-2 rounded-lg">
-                                <i data-lucide="arrow-left-circle" class="w-3 h-3 text-slate-500"></i>
-                                <div><p class="text-[9px] text-slate-500 leading-none mb-0.5 font-bold">EXIT</p><p class="text-[11px] text-slate-300 font-mono font-bold">${t.exit || '-'}</p></div>
+                            <div class="text-right">
+                                <p class="font-black text-sm ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString('id-ID')}</p>
+                                <button onclick="deleteTrade('${t.id}')" class="text-slate-600 hover:text-rose-500 transition-colors"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
                             </div>
                         </div>
                     </div>
@@ -269,63 +221,53 @@
 
         window.addTrade = async (e) => {
             e.preventDefault();
-            const selectedDate = getEl('t-date').value;
+            getEl('loading-overlay').classList.remove('hidden');
             const trade = {
                 pair: getEl('t-pair').value.toUpperCase(),
                 type: getEl('t-type').value,
                 entry: parseFloat(getEl('t-entry').value) || 0,
                 exit: parseFloat(getEl('t-exit').value) || 0,
-                pnl: parseFloat(getEl('t-pnl').value),
-                notes: getEl('t-notes').value || "",
-                date: selectedDate ? new Date(selectedDate).toISOString() : new Date().toISOString()
+                pnl: parseFloat(getEl('t-pnl').value) || 0,
+                date: new Date(getEl('t-date').value).toISOString()
             };
             try {
                 await addDoc(collection(db, "users", currentUser.uid, "trades"), trade);
                 e.target.reset();
                 navigateTo('dashboard');
-            } catch (e) { console.error("Add Trade Error:", e.message); }
+            } catch (e) { console.error(e); }
+            finally { getEl('loading-overlay').classList.add('hidden'); }
         };
 
         window.deleteTrade = (id) => {
             showConfirmModal("Hapus trade ini?", async () => {
-                try { await deleteDoc(doc(db, "users", currentUser.uid, "trades", id)); }
-                catch (e) { console.error("Delete Trade Error:", e.message); }
+                await deleteDoc(doc(db, "users", currentUser.uid, "trades", id));
             });
         };
 
         window.deleteAllTrades = () => {
-            showConfirmModal("⚠️ HAPUS SEMUA DATA?<br><span class='text-[10px] text-rose-500'>Tindakan ini tidak bisa dibatalkan. Cocok untuk reset backtest.</span>", async () => {
-                getEl('loading-overlay').classList.remove('hidden');
-                try {
-                    const tradesCol = collection(db, "users", currentUser.uid, "trades");
-                    const snapshot = await getDocs(tradesCol);
-                    const batch = writeBatch(db);
-                    snapshot.forEach((doc) => batch.delete(doc.ref));
-                    await batch.commit();
-                } catch (e) { console.error("Delete All Error:", e.message); }
-                finally { getEl('loading-overlay').classList.add('hidden'); hideConfirmModal(); }
+            showConfirmModal("⚠️ HAPUS SEMUA DATA?", async () => {
+                const snapshot = await getDocs(collection(db, "users", currentUser.uid, "trades"));
+                const batch = writeBatch(db);
+                snapshot.forEach(doc => batch.delete(doc.ref));
+                await batch.commit();
             });
         };
 
-        // --- CUSTOM CONFIRM MODAL ---
         let confirmAction = null;
         function showConfirmModal(msg, action) {
             getEl('modal-msg').innerHTML = msg;
-            getEl('confirm-modal').classList.remove('hidden');
-            getEl('confirm-modal').classList.add('flex');
+            getEl('confirm-modal').classList.replace('hidden', 'flex');
             confirmAction = action;
         }
         window.hideConfirmModal = () => {
-            getEl('confirm-modal').classList.add('hidden');
-            getEl('confirm-modal').classList.remove('flex');
+            getEl('confirm-modal').classList.replace('flex', 'hidden');
             confirmAction = null;
         }
         window.executeConfirm = () => {
-            if(confirmAction && typeof confirmAction === 'function') confirmAction();
+            if(confirmAction) confirmAction();
             hideConfirmModal();
         }
 
-        // --- CALENDAR LOGIC ---
         window.changeMonth = (val) => {
             currentCalendarDate.setMonth(currentCalendarDate.getMonth() + val);
             renderCalendar();
@@ -334,282 +276,319 @@
         function renderCalendar() {
             const container = getEl('calendar-grid');
             const monthLabel = getEl('current-month-label');
-            if(!container) return;
-
+            const monthPnlDisplay = getEl('month-pnl-display');
+            if(!container || !monthLabel) return;
+            
             container.innerHTML = '';
             const year = currentCalendarDate.getFullYear();
             const month = currentCalendarDate.getMonth();
-            
             monthLabel.innerText = new Intl.DateTimeFormat('id-ID', { month: 'long', year: 'numeric' }).format(currentCalendarDate);
-
+            
             const firstDay = new Date(year, month, 1).getDay();
             const lastDate = new Date(year, month + 1, 0).getDate();
-
+            
             const pnlByDate = {};
+            let monthTotalPnL = 0;
+
             allTrades.forEach(t => {
-                const tDate = new Date(t.date);
-                if(tDate.getFullYear() === year && tDate.getMonth() === month) {
-                    const day = tDate.getDate();
-                    pnlByDate[day] = (pnlByDate[day] || 0) + t.pnl;
+                const d = new Date(t.date);
+                if(d.getFullYear() === year && d.getMonth() === month) {
+                    pnlByDate[d.getDate()] = (pnlByDate[d.getDate()] || 0) + t.pnl;
+                    monthTotalPnL += t.pnl;
                 }
             });
 
-            for(let i = 0; i < firstDay; i++) {
-                container.innerHTML += `<div class="aspect-square"></div>`;
+            // Headers: Sun-Sat + "Weekly"
+            const days = ['MIN', 'SEN', 'SEL', 'RAB', 'KAM', 'JUM', 'SAB', 'PNL/W'];
+            days.forEach(day => {
+                container.innerHTML += `<div class="text-[8px] font-black text-slate-600 text-center pb-2">${day}</div>`;
+            });
+
+            let currentWeekPnL = 0;
+            let dayCount = 0;
+
+            // Empty slots for first week
+            for(let i=0; i<firstDay; i++) {
+                container.innerHTML += `<div></div>`;
+                dayCount++;
             }
 
-            for(let day = 1; day <= lastDate; day++) {
-                const hasPnL = pnlByDate[day] !== undefined;
-                const pnl = pnlByDate[day] || 0;
-                const pnlClass = pnl > 0 ? 'text-emerald-400' : pnl < 0 ? 'text-rose-400' : 'text-slate-500';
-                const bgClass = hasPnL ? (pnl > 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20') : 'bg-slate-900/40 border-slate-800/50';
+            for(let day=1; day<=lastDate; day++) {
+                const p = pnlByDate[day];
+                if (p !== undefined) currentWeekPnL += p;
 
+                const bg = p !== undefined ? (p > 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20') : 'bg-white/5 border-white/5';
+                
                 container.innerHTML += `
-                    <div class="aspect-square flex flex-col items-center justify-center rounded-xl border ${bgClass} p-1 transition-all">
-                        <span class="text-[10px] font-bold text-slate-500">${day}</span>
-                        ${hasPnL ? `<span class="text-[7px] font-black ${pnlClass} truncate w-full text-center tracking-tighter">${pnl > 0 ? '+' : ''}${Math.round(pnl).toLocaleString()}</span>` : ''}
+                    <div class="aspect-square flex flex-col items-center justify-center rounded-xl border ${bg} text-[10px] font-bold relative overflow-hidden">
+                        <span class="text-slate-500 text-[8px] absolute top-1 left-1.5">${day}</span>
+                        ${p !== undefined ? `<span class="${p>0?'text-emerald-400':'text-rose-400'} text-[7px] leading-tight px-1 text-center mt-1">${p>0?'+':''}${p.toFixed(1)}</span>` : ''}
                     </div>
                 `;
+                dayCount++;
+
+                // If end of week (Saturday), add Weekly PnL
+                if (dayCount % 8 === 7) {
+                    const wColor = currentWeekPnL > 0 ? 'text-emerald-400' : (currentWeekPnL < 0 ? 'text-rose-400' : 'text-slate-600');
+                    container.innerHTML += `
+                        <div class="aspect-square flex items-center justify-center rounded-xl bg-blue-500/5 border border-blue-500/10">
+                            <span class="${wColor} text-[8px] font-black text-center">${currentWeekPnL !== 0 ? (currentWeekPnL > 0 ? '+' : '') + currentWeekPnL.toFixed(1) : '-'}</span>
+                        </div>
+                    `;
+                    currentWeekPnL = 0;
+                    dayCount++;
+                }
+            }
+
+            // Fill remaining days of the last week until we reach the Weekly PnL column
+            while (dayCount % 8 !== 7) {
+                container.innerHTML += `<div></div>`;
+                dayCount++;
+            }
+            
+            // Final Weekly PnL for the last week
+            const finalWColor = currentWeekPnL > 0 ? 'text-emerald-400' : (currentWeekPnL < 0 ? 'text-rose-400' : 'text-slate-600');
+            container.innerHTML += `
+                <div class="aspect-square flex items-center justify-center rounded-xl bg-blue-500/5 border border-blue-500/10">
+                    <span class="${finalWColor} text-[8px] font-black text-center">${currentWeekPnL !== 0 ? (currentWeekPnL > 0 ? '+' : '') + currentWeekPnL.toFixed(1) : '-'}</span>
+                </div>
+            `;
+
+            // Update Monthly Total Display
+            if (monthPnlDisplay) {
+                monthPnlDisplay.innerText = (monthTotalPnL >= 0 ? '+' : '') + monthTotalPnL.toLocaleString('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+                monthPnlDisplay.className = `text-lg font-black ${monthTotalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
             }
         }
-
-        window.addEventListener('DOMContentLoaded', () => {
-            lucide.createIcons();
-        });
     </script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-        body { background-color: #020617; color: #f8fafc; font-family: 'Plus Jakarta Sans', sans-serif; -webkit-font-smoothing: antialiased; }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+        :root { --bg: #020617; }
+        body { background-color: var(--bg); color: #f8fafc; font-family: 'Plus Jakarta Sans', sans-serif; overflow-x: hidden; }
         .hidden { display: none; }
-        .glass { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
-        input, select, textarea { outline: none; background: #0f172a; border: 1px solid #1e293b; border-radius: 1rem; padding: 0.85rem 1rem; color: #f1f5f9; width: 100%; font-size: 0.85rem; transition: all 0.2s; }
-        input:focus { border-color: #3b82f6; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1); }
-        .nav-link { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-        input[type="datetime-local"]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.5; }
+        .glass { background: rgba(15, 23, 42, 0.7); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+        input, select { background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 1rem; padding: 0.75rem 1rem; color: #f1f5f9; width: 100%; font-size: 0.85rem; transition: all 0.2s; }
+        input:focus { outline: none; border-color: #3b82f6; background: rgba(30, 41, 59, 0.8); }
+        .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); transition: transform 0.1s; }
+        .btn-primary:active { transform: scale(0.97); }
     </style>
 </head>
-<body class="min-h-screen pb-32">
+<body class="min-h-screen pb-24">
 
-    <!-- Confirmation Modal (Custom UI) -->
-    <div id="confirm-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-md z-[200] items-center justify-center p-6">
-        <div class="bg-slate-900 border border-slate-800 p-8 rounded-[2.5rem] w-full max-w-xs shadow-2xl text-center space-y-6">
-            <div class="w-16 h-16 bg-rose-500/10 text-rose-500 rounded-2xl flex items-center justify-center mx-auto">
-                <i data-lucide="alert-triangle" class="w-8 h-8"></i>
-            </div>
+    <!-- Modal Konfirmasi -->
+    <div id="confirm-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[200] items-center justify-center p-6">
+        <div class="bg-slate-900 border border-white/10 p-8 rounded-[2rem] w-full max-w-xs text-center space-y-6 shadow-2xl">
             <p id="modal-msg" class="text-sm font-bold text-white uppercase tracking-tight"></p>
-            <div class="flex flex-col gap-3">
+            <div class="flex flex-col gap-2">
                 <button onclick="executeConfirm()" class="w-full bg-rose-600 py-3 rounded-xl font-black text-white text-xs uppercase tracking-widest">Ya, Lanjutkan</button>
                 <button onclick="hideConfirmModal()" class="w-full bg-slate-800 py-3 rounded-xl font-black text-slate-400 text-xs uppercase tracking-widest">Batal</button>
             </div>
         </div>
     </div>
 
-    <!-- Loading Overlay -->
-    <div id="loading-overlay" class="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-[100]">
+    <!-- Loading Screen -->
+    <div id="loading-overlay" class="fixed inset-0 bg-slate-950 flex items-center justify-center z-[100]">
         <div class="relative">
-            <div class="h-16 w-16 rounded-full border-t-4 border-blue-500 animate-spin"></div>
-            <div class="absolute inset-0 flex items-center justify-center"><i data-lucide="zap" class="w-6 h-6 text-blue-500"></i></div>
+            <div class="h-16 w-16 rounded-full border-t-2 border-b-2 border-blue-500 animate-spin"></div>
+            <div class="absolute inset-0 flex items-center justify-center">
+                <i data-lucide="trending-up" class="w-6 h-6 text-blue-500"></i>
+            </div>
         </div>
     </div>
 
-    <!-- 1. AUTH SECTION -->
-    <section id="auth-section" class="hidden min-h-screen flex items-center justify-center p-8">
-        <div class="w-full max-w-sm space-y-12">
-            <div class="text-center">
-                <div class="bg-blue-600 w-20 h-20 rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-2xl shadow-blue-500/40 rotate-12">
-                    <i data-lucide="trending-up" class="text-white w-10 h-10 -rotate-12"></i>
-                </div>
-                <h1 class="text-3xl font-black tracking-tighter text-white uppercase italic">Journal Pro</h1>
-                <p class="text-slate-500 text-[10px] font-black uppercase tracking-[0.4em] mt-2">Professional Trading Suite</p>
+    <!-- AUTH SECTION -->
+    <section id="auth-section" class="hidden min-h-screen flex items-center justify-center p-8 bg-[radial-gradient(circle_at_top,#1e293b,transparent)]">
+        <div class="w-full max-w-sm text-center">
+            <div class="mb-10 inline-block p-4 bg-blue-600/10 rounded-3xl border border-blue-500/20 rotate-3">
+                <i data-lucide="shield-check" class="text-blue-500 w-10 h-10 -rotate-3"></i>
             </div>
-            <div class="space-y-4">
-                <input id="email" type="email" placeholder="Email Address">
-                <div class="relative">
-                    <input id="password" type="password" placeholder="Secure Password">
-                    <button onclick="togglePassword()" class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500"><i id="toggle-icon" data-lucide="eye" class="w-5 h-5"></i></button>
+            <h1 id="auth-title" class="text-3xl font-black italic uppercase tracking-tighter mb-2 text-white">LOGIN</h1>
+            <p class="text-slate-500 text-xs mb-8">Kelola perdagangan Anda dengan profesional</p>
+            
+            <div class="space-y-4 text-left">
+                <div class="space-y-1">
+                    <label class="text-[10px] font-black text-slate-500 uppercase ml-2">Email</label>
+                    <input id="email" type="email" placeholder="email@contoh.com">
                 </div>
-                <button onclick="handleAuth('login')" class="w-full bg-blue-600 py-4 rounded-2xl font-black text-white shadow-xl shadow-blue-600/30">LOGIN SYSTEM</button>
-                <button onclick="handleAuth('register')" class="w-full text-slate-500 text-[10px] font-black tracking-[0.2em] uppercase">Create New Identity</button>
-                <div class="relative py-2 flex items-center">
-                    <div class="flex-grow border-t border-slate-800"></div>
-                    <span class="flex-shrink mx-4 text-slate-700 text-[9px] font-black uppercase">OR</span>
-                    <div class="flex-grow border-t border-slate-800"></div>
+                <div class="space-y-1">
+                    <label class="text-[10px] font-black text-slate-500 uppercase ml-2">Password</label>
+                    <div class="relative">
+                        <input id="password" type="password" placeholder="••••••••">
+                        <button onclick="togglePassword('password', 'pass-icon')" class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500">
+                            <i id="pass-icon" data-lucide="eye" class="w-4 h-4"></i>
+                        </button>
+                    </div>
                 </div>
-                <button onclick="handleGuestLogin()" class="w-full bg-slate-900 border border-slate-800 py-3 rounded-2xl font-black text-slate-400 text-[10px] uppercase tracking-widest hover:bg-slate-800 transition-colors">Start Backtest as Guest</button>
+                <button id="auth-submit-btn" onclick="handleAuth()" class="w-full btn-primary py-4 rounded-2xl font-black shadow-xl shadow-blue-500/20 text-sm">MASUK</button>
+                
+                <div class="pt-4 space-y-3">
+                    <button onclick="toggleAuthMode()" id="auth-toggle-text" class="w-full text-slate-500 text-[11px] font-bold hover:text-blue-400 transition-colors">Belum punya akun? Daftar</button>
+                    <div class="flex items-center gap-4 py-2">
+                        <div class="h-px bg-slate-800 flex-1"></div>
+                        <span class="text-[9px] text-slate-600 font-black uppercase">Atau</span>
+                        <div class="h-px bg-slate-800 flex-1"></div>
+                    </div>
+                    <button onclick="handleGuestLogin()" class="w-full bg-white/5 border border-white/5 py-3 rounded-2xl font-black text-slate-400 text-[10px] uppercase tracking-widest hover:bg-white/10">Masuk sebagai Tamu</button>
+                </div>
             </div>
         </div>
     </section>
 
-    <!-- 2. SETUP SECTION -->
+    <!-- SETUP SECTION -->
     <section id="account-section" class="hidden min-h-screen flex items-center justify-center p-6">
-        <div class="w-full max-w-sm bg-slate-900/50 p-8 rounded-[2.5rem] border border-slate-800 shadow-2xl">
-            <h2 class="text-2xl font-black text-white tracking-tight mb-8">System Configuration</h2>
+        <div class="w-full max-w-sm glass p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
+            <h2 class="text-xl font-black mb-6 uppercase italic flex items-center gap-2">
+                <i data-lucide="settings-2" class="w-5 h-5 text-blue-500"></i> Setup Profil
+            </h2>
             <form onsubmit="saveAccount(event)" class="space-y-5">
-                <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Master Account Name</label>
-                    <input id="acc-name" placeholder="ex: Backtest Mode" required>
-                </div>
-                <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Base Capital</label>
+                <input id="acc-name" placeholder="Nama Akun (Broker/Personal)" required>
+                <div class="space-y-1">
+                    <label class="text-[9px] font-black text-slate-500 uppercase ml-2">Modal Awal</label>
                     <input id="acc-balance" type="number" step="0.01" placeholder="0.00" required>
                 </div>
-                <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Currency Unit</label>
-                    <select id="acc-currency">
-                        <option value="USD">US Dollar ($)</option>
-                        <option value="IDR">Rupiah (Rp)</option>
-                    </select>
-                </div>
-                <button type="submit" class="w-full bg-emerald-600 py-4 rounded-2xl font-black mt-4 shadow-xl shadow-emerald-600/20 uppercase tracking-widest">ACTIVATE CORE</button>
+                <select id="acc-currency">
+                    <option value="USD">USD ($)</option>
+                    <option value="IDR">IDR (Rp)</option>
+                </select>
+                <button type="submit" class="w-full btn-primary py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg shadow-blue-500/20">Mulai Jurnal</button>
             </form>
         </div>
     </section>
 
-    <!-- 3. DASHBOARD SECTION -->
-    <section id="dashboard-section" class="hidden p-6 max-w-2xl mx-auto space-y-8 animate-in fade-in duration-500">
+    <!-- DASHBOARD -->
+    <section id="dashboard-section" class="hidden p-6 max-w-2xl mx-auto space-y-6">
         <div class="flex justify-between items-center">
-            <div>
-                <p class="text-blue-500 text-[10px] font-black uppercase tracking-[0.3em] mb-1">Active Portfolio</p>
-                <h1 id="display-acc-name" class="text-2xl font-black text-white uppercase italic tracking-tight">DASHBOARD</h1>
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+                    <i data-lucide="user" class="w-5 h-5 text-white"></i>
+                </div>
+                <div>
+                    <p class="text-[10px] font-black text-slate-500 uppercase tracking-widest">Akun Aktif</p>
+                    <h1 id="display-acc-name" class="text-sm font-bold text-white uppercase italic">Trader</h1>
+                </div>
             </div>
-            <div class="flex gap-2">
-                <button onclick="logout()" class="w-12 h-12 flex items-center justify-center bg-slate-900 border border-slate-800 rounded-2xl text-slate-500 active:scale-90"><i data-lucide="log-out" class="w-5 h-5"></i></button>
-            </div>
+            <button onclick="logout()" class="w-10 h-10 bg-white/5 border border-white/5 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-500 transition-colors"><i data-lucide="power" class="w-4 h-4"></i></button>
         </div>
 
-        <div class="bg-gradient-to-br from-slate-800 to-slate-950 p-8 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden border border-white/5">
-            <div class="relative z-10">
-                <p class="text-white/40 text-[10px] font-black uppercase tracking-widest mb-2">Total Equity Balance</p>
-                <h2 class="text-5xl font-black mb-10 tracking-tighter"><span class="text-2xl opacity-40 font-medium mr-1">$</span><span class="val-balance">0</span></h2>
-                <div class="flex gap-12">
-                    <div class="space-y-1">
-                        <p class="text-white/30 text-[9px] font-black uppercase tracking-widest">Acc. Performance</p>
-                        <p class="val-pnl">+0</p>
-                    </div>
-                    <div class="space-y-1">
-                        <p class="text-white/30 text-[9px] font-black uppercase tracking-widest">Success Rate</p>
-                        <p id="val-winrate" class="text-white font-black text-xl">0%</p>
-                    </div>
+        <!-- Kartu Utama -->
+        <div class="relative overflow-hidden bg-gradient-to-br from-blue-600 to-indigo-900 p-8 rounded-[2.5rem] shadow-2xl shadow-blue-900/30">
+            <div class="absolute top-0 right-0 p-8 opacity-10">
+                <i data-lucide="wallet" class="w-32 h-32"></i>
+            </div>
+            <p class="text-blue-100/60 text-[10px] font-black uppercase tracking-[0.2em] mb-2">Total Equity</p>
+            <h2 class="text-4xl font-black mb-8 tracking-tighter text-white"><span class="val-balance">0</span></h2>
+            <div class="grid grid-cols-2 gap-4">
+                <div class="bg-black/20 backdrop-blur-md p-4 rounded-2xl border border-white/5">
+                    <p class="text-white/40 text-[8px] font-black uppercase mb-1 tracking-widest">Growth</p>
+                    <p class="val-pnl font-black text-lg">+0</p>
+                </div>
+                <div class="bg-black/20 backdrop-blur-md p-4 rounded-2xl border border-white/5">
+                    <p class="text-white/40 text-[8px] font-black uppercase mb-1 tracking-widest">Win Rate</p>
+                    <p id="val-winrate" class="font-black text-lg text-white">0%</p>
                 </div>
             </div>
         </div>
 
         <div class="grid grid-cols-2 gap-4">
-            <div class="bg-slate-900/50 border border-slate-800 p-6 rounded-3xl text-center">
-                <p class="text-slate-500 text-[10px] font-black uppercase mb-1 tracking-widest">Total Trade</p>
-                <p id="val-total-trades" class="text-2xl font-black">0</p>
+            <div class="bg-white/5 border border-white/5 p-5 rounded-3xl flex flex-col items-center justify-center">
+                <p class="text-slate-500 text-[9px] font-black uppercase tracking-widest mb-1">Total Trades</p>
+                <p id="val-total-trades" class="text-xl font-black">0</p>
             </div>
-            <div class="bg-slate-900/50 border border-slate-800 p-6 rounded-3xl text-center overflow-hidden">
-                 <p class="text-slate-500 text-[10px] font-black uppercase mb-1 tracking-widest">Reset System</p>
-                 <button onclick="deleteAllTrades()" class="text-rose-500 flex items-center justify-center gap-2 mx-auto font-black text-xs uppercase tracking-widest mt-1">
-                    <i data-lucide="refresh-ccw" class="w-3.5 h-3.5"></i> Clear All
-                 </button>
-            </div>
+            <button onclick="deleteAllTrades()" class="bg-white/5 border border-white/5 p-5 rounded-3xl flex flex-col items-center justify-center group">
+                <i data-lucide="refresh-ccw" class="w-4 h-4 text-rose-500/50 group-hover:rotate-180 transition-transform duration-500 mb-1"></i>
+                <span class="text-rose-500/80 text-[9px] font-black uppercase tracking-widest">Reset Data</span>
+            </button>
         </div>
 
-        <button onclick="navigateTo('journal')" class="w-full bg-blue-600 p-6 rounded-3xl flex items-center justify-between group active:scale-[0.98] transition-all shadow-xl shadow-blue-600/20">
-            <div class="flex items-center gap-5">
-                <div class="bg-white/20 w-12 h-12 rounded-2xl flex items-center justify-center"><i data-lucide="plus" class="w-6 h-6 text-white"></i></div>
-                <div class="text-left">
-                    <span class="block font-black text-white text-lg tracking-tight uppercase italic">Add New Trade</span>
-                    <span class="text-[9px] font-bold text-white/50 uppercase tracking-widest">Open journal ledger</span>
-                </div>
+        <button onclick="navigateTo('journal')" class="w-full btn-primary p-5 rounded-[2rem] flex items-center justify-between shadow-xl shadow-blue-500/10 group">
+            <div class="flex items-center gap-4">
+                <div class="bg-white/20 w-10 h-10 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform"><i data-lucide="plus" class="w-5 h-5"></i></div>
+                <span class="font-black uppercase italic tracking-tight">Open New Journal</span>
             </div>
-            <i data-lucide="arrow-right" class="w-6 h-6 text-white/40"></i>
+            <i data-lucide="chevron-right" class="w-5 h-5 text-white/40"></i>
         </button>
     </section>
 
-    <!-- 4. RECAP SECTION -->
-    <section id="recap-section" class="hidden p-6 max-w-2xl mx-auto space-y-8 animate-in slide-in-from-bottom-8 duration-500">
-        <div class="flex items-center justify-between pt-2">
-            <div>
-                <p class="text-emerald-500 text-[10px] font-black uppercase tracking-[0.3em] mb-1">Performance Recap</p>
-                <h2 class="text-2xl font-black tracking-tight uppercase italic">TRADING CALENDAR</h2>
-            </div>
-            <div class="flex items-center gap-2 bg-slate-900 p-2 rounded-2xl border border-slate-800">
-                <button onclick="changeMonth(-1)" class="p-2 text-slate-400 hover:text-white"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
-                <span id="current-month-label" class="text-[10px] font-black uppercase tracking-widest w-32 text-center text-slate-300">MONTH 2024</span>
-                <button onclick="changeMonth(1)" class="p-2 text-slate-400 hover:text-white"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+    <!-- RECAP SECTION -->
+    <section id="recap-section" class="hidden p-6 max-w-2xl mx-auto space-y-6">
+        <div class="flex items-center justify-between">
+            <h2 class="text-xl font-black uppercase italic tracking-tight flex items-center gap-2">
+                <i data-lucide="calendar" class="w-5 h-5 text-blue-500"></i> Trading Recap
+            </h2>
+            <div class="flex items-center gap-2 bg-white/5 p-1.5 rounded-xl border border-white/5">
+                <button onclick="changeMonth(-1)" class="p-1.5 hover:bg-white/10 rounded-lg"><i data-lucide="chevron-left" class="w-4 h-4 text-slate-400"></i></button>
+                <span id="current-month-label" class="text-[9px] font-black uppercase tracking-widest w-24 text-center text-slate-200">BULAN</span>
+                <button onclick="changeMonth(1)" class="p-1.5 hover:bg-white/10 rounded-lg"><i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i></button>
             </div>
         </div>
+        
+        <!-- Grid Kalender dengan kolom ke-8 untuk PnL Mingguan -->
+        <div id="calendar-grid" class="grid grid-cols-8 gap-1.5 bg-white/5 p-4 rounded-[2rem] border border-white/5"></div>
+        
+        <!-- PnL Bulanan -->
+        <div class="bg-white/5 border border-white/5 p-6 rounded-[2rem] flex flex-col items-center justify-center">
+            <p class="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-1">Monthly Performance</p>
+            <div id="month-pnl-display" class="text-lg font-black">+0.0</div>
+        </div>
 
-        <div class="bg-slate-950 p-6 rounded-[2.5rem] border border-slate-800 shadow-2xl">
-            <div class="grid grid-cols-7 gap-2 mb-4">
-                <div class="text-center text-[9px] font-black text-slate-600 uppercase">Min</div>
-                <div class="text-center text-[9px] font-black text-slate-600 uppercase">Sen</div>
-                <div class="text-center text-[9px] font-black text-slate-600 uppercase">Sel</div>
-                <div class="text-center text-[9px] font-black text-slate-600 uppercase">Rab</div>
-                <div class="text-center text-[9px] font-black text-slate-600 uppercase">Kam</div>
-                <div class="text-center text-[9px] font-black text-slate-600 uppercase">Jum</div>
-                <div class="text-center text-[9px] font-black text-slate-600 uppercase">Sab</div>
-            </div>
-            <div id="calendar-grid" class="grid grid-cols-7 gap-2"></div>
+        <div class="flex gap-4 px-2 justify-center">
+            <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50"></div> <span class="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Profit Day</span></div>
+            <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-rose-500 shadow-sm shadow-rose-500/50"></div> <span class="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Loss Day</span></div>
+            <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-blue-500 shadow-sm shadow-blue-500/50"></div> <span class="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Weekly Total</span></div>
         </div>
     </section>
 
-    <!-- 5. JOURNAL SECTION -->
-    <section id="journal-section" class="hidden p-6 max-w-2xl mx-auto space-y-10 animate-in slide-in-from-right-8 duration-500">
-        <h2 class="text-2xl font-black tracking-tight uppercase italic pt-2">TRADE LOGS</h2>
+    <!-- JOURNAL SECTION -->
+    <section id="journal-section" class="hidden p-6 max-w-2xl mx-auto space-y-8">
+        <h2 class="text-xl font-black uppercase italic tracking-tight flex items-center gap-2">
+            <i data-lucide="book-marked" class="w-5 h-5 text-blue-500"></i> Trade Logs
+        </h2>
         
-        <form onsubmit="addTrade(event)" class="bg-slate-950 p-8 rounded-[2.5rem] border border-slate-800 shadow-2xl space-y-6">
-            <div class="space-y-2">
-                <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest flex items-center gap-2"><i data-lucide="calendar" class="w-3.5 h-3.5"></i> Execution Time</label>
+        <form onsubmit="addTrade(event)" class="bg-white/5 p-6 rounded-[2.5rem] border border-white/5 space-y-4">
+            <div class="space-y-1">
+                <label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Waktu Trade</label>
                 <input id="t-date" type="datetime-local" required>
             </div>
-            <div class="grid grid-cols-2 gap-5">
-                <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Asset Pair</label>
-                    <input id="t-pair" placeholder="XAUUSD" required>
-                </div>
-                <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Direction</label>
-                    <select id="t-type">
-                        <option value="BUY">BUY / LONG</option>
-                        <option value="SELL">SELL / SHORT</option>
-                    </select>
-                </div>
+            <div class="grid grid-cols-2 gap-3">
+                <input id="t-pair" placeholder="Simbol (Contoh: GOLD)" required>
+                <select id="t-type" class="font-bold">
+                    <option value="BUY">BUY</option>
+                    <option value="SELL">SELL</option>
+                </select>
             </div>
-            <div class="grid grid-cols-2 gap-5">
-                <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Entry</label>
-                    <input id="t-entry" type="number" step="0.00001" placeholder="0.00">
-                </div>
-                <div class="space-y-2">
-                    <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Exit</label>
-                    <input id="t-exit" type="number" step="0.00001" placeholder="0.00">
-                </div>
+            <div class="grid grid-cols-2 gap-3">
+                <input id="t-entry" type="number" step="0.0000001" placeholder="Entry Price">
+                <input id="t-exit" type="number" step="0.0000001" placeholder="Exit Price">
             </div>
-            <div class="space-y-2">
-                <label class="text-[10px] font-black text-slate-500 uppercase px-1 tracking-widest">Net Profit / Loss (PnL)</label>
-                <input id="t-pnl" type="number" step="0.01" placeholder="0.00" required>
+            <div class="space-y-1">
+                <label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Hasil Akhir (PnL)</label>
+                <input id="t-pnl" type="number" step="0.01" placeholder="Cth: 50.5" required class="border-blue-500/30">
             </div>
-            <button type="submit" class="w-full bg-blue-600 py-4 rounded-2xl font-black uppercase tracking-[0.2em] shadow-xl shadow-blue-600/30">Commit Trade</button>
+            <button type="submit" class="w-full btn-primary py-4 rounded-2xl font-black uppercase text-xs shadow-lg tracking-widest mt-2">Commit Trade</button>
         </form>
 
-        <div class="space-y-6">
-            <div class="flex justify-between items-center px-2">
-                <h3 class="text-[11px] font-black text-blue-500 uppercase tracking-[0.3em]">HISTORY</h3>
-                <button onclick="deleteAllTrades()" class="text-[9px] font-black text-rose-500 uppercase tracking-widest">Clear List</button>
-            </div>
-            <div id="trades-list"></div>
-        </div>
+        <div id="trades-list" class="space-y-3"></div>
     </section>
 
-    <!-- Bottom Navigation -->
-    <nav id="main-nav" class="hidden fixed bottom-8 left-1/2 -translate-x-1/2 glass w-[90%] max-w-md border border-white/5 rounded-[2.5rem] p-2 flex justify-between items-center z-50 shadow-2xl">
-        <button onclick="navigateTo('dashboard')" data-target="dashboard" class="nav-link flex-1 flex flex-col items-center gap-1.5 py-4 rounded-[2rem]">
-            <i data-lucide="layout-grid" class="w-5 h-5 transition-colors"></i>
-            <span class="text-[9px] font-black uppercase tracking-widest text-slate-500">Dash</span>
+    <!-- NAVIGATION BAR -->
+    <nav id="main-nav" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 glass w-[90%] max-w-sm border border-white/10 rounded-[2.5rem] p-2 flex justify-between z-50 shadow-2xl">
+        <button onclick="navigateTo('dashboard')" data-target="dashboard" class="nav-link flex-1 flex flex-col items-center gap-1 py-2">
+            <i data-lucide="layout-dashboard" class="w-5 h-5 text-blue-400"></i>
+            <span class="text-[8px] font-black uppercase text-blue-400 tracking-widest">Home</span>
         </button>
-        <button onclick="navigateTo('recap')" data-target="recap" class="nav-link flex-1 flex flex-col items-center gap-1.5 py-4 rounded-[2rem]">
-            <i data-lucide="calendar-range" class="w-5 h-5 text-slate-500 transition-colors"></i>
-            <span class="text-[9px] font-black uppercase tracking-widest text-slate-500">Recap</span>
+        <button onclick="navigateTo('recap')" data-target="recap" class="nav-link flex-1 flex flex-col items-center gap-1 py-2">
+            <i data-lucide="calendar-days" class="w-5 h-5 text-slate-500"></i>
+            <span class="text-[8px] font-black uppercase text-slate-500 tracking-widest">Recap</span>
         </button>
-        <button onclick="navigateTo('journal')" data-target="journal" class="nav-link flex-1 flex flex-col items-center gap-1.5 py-4 rounded-[2rem]">
-            <i data-lucide="book-open" class="w-5 h-5 text-slate-500 transition-colors"></i>
-            <span class="text-[9px] font-black uppercase tracking-widest text-slate-500">Logs</span>
+        <button onclick="navigateTo('journal')" data-target="journal" class="nav-link flex-1 flex flex-col items-center gap-1 py-2">
+            <i data-lucide="pencil-line" class="w-5 h-5 text-slate-500"></i>
+            <span class="text-[8px] font-black uppercase text-slate-500 tracking-widest">Journal</span>
         </button>
     </nav>
 
+    <script>
+        // Inisialisasi Lucide Icons pertama kali
+        window.onload = () => { lucide.createIcons(); };
+    </script>
 </body>
 </html>
