@@ -33,7 +33,6 @@
 
         const getEl = (id) => document.getElementById(id);
 
-        // --- Auth Toggle & Password Visibility ---
         window.toggleAuthMode = () => {
             const isLogin = getEl('auth-title').innerText === 'LOGIN';
             getEl('auth-title').innerText = isLogin ? 'REGISTER' : 'LOGIN';
@@ -94,7 +93,6 @@
             } catch (e) { 
                 let errorMsg = "Terjadi kesalahan.";
                 if (e.code === 'auth/invalid-credential') errorMsg = "Email atau password salah.";
-                if (e.code === 'auth/email-already-in-use') errorMsg = "Email sudah terdaftar.";
                 showConfirmModal(`<span class="text-rose-500 font-bold">Gagal</span><br><span class="text-[10px]">${errorMsg}</span>`, () => {});
             } finally { getEl('loading-overlay').classList.add('hidden'); }
         };
@@ -148,14 +146,14 @@
 
         function startDataListener() {
             if(unsubscribeTrades) unsubscribeTrades();
-            const q = query(collection(db, "users", currentUser.uid, "trades"), orderBy("date", "desc"));
+            const q = query(collection(db, "users", currentUser.uid, "trades"), orderBy("date", "asc"));
             unsubscribeTrades = onSnapshot(q, (snapshot) => {
                 allTrades = [];
                 snapshot.forEach(doc => allTrades.push({id: doc.id, ...doc.data()}));
                 updateUI();
                 showSection('dashboard-section');
                 updateNavIcons('dashboard');
-            }, (error) => console.error(error));
+            });
         }
 
         function updateNavIcons(target) {
@@ -174,6 +172,51 @@
             updateNavIcons(target);
         };
 
+        function renderEquityCurve(trades) {
+            const svg = getEl('equity-curve-svg');
+            if (!svg) return;
+
+            let currentBal = accountData?.balance || 0;
+            const points = [currentBal];
+            
+            const sortedTrades = [...trades].sort((a, b) => new Date(a.date) - new Date(b.date));
+            sortedTrades.forEach(t => {
+                currentBal += t.pnl;
+                points.push(currentBal);
+            });
+
+            if (points.length < 2) {
+                svg.innerHTML = '';
+                return;
+            }
+
+            const width = 400;
+            const height = 100;
+            const max = Math.max(...points);
+            const min = Math.min(...points);
+            const range = max - min === 0 ? 1 : max - min;
+            
+            const coords = points.map((p, i) => {
+                const x = (i / (points.length - 1)) * width;
+                const y = height - ((p - min) / range) * height;
+                return `${x},${y}`;
+            });
+
+            const pathData = `M ${coords.join(' L ')}`;
+            const areaData = `${pathData} L ${width},${height} L 0,${height} Z`;
+
+            svg.innerHTML = `
+                <defs>
+                    <linearGradient id="curveGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.3" />
+                        <stop offset="100%" stop-color="#3b82f6" stop-opacity="0" />
+                    </linearGradient>
+                </defs>
+                <path d="${areaData}" fill="url(#curveGradient)" />
+                <path d="${pathData}" fill="none" stroke="#60a5fa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.5))" />
+            `;
+        }
+
         function updateUI() {
             const totalPnL = allTrades.reduce((sum, t) => sum + t.pnl, 0);
             const currentBalance = (accountData?.balance || 0) + totalPnL;
@@ -190,13 +233,17 @@
             if(getEl('val-total-trades')) getEl('val-total-trades').innerText = allTrades.length;
             if(getEl('display-acc-name')) getEl('display-acc-name').innerText = accountData?.name || "Trader";
 
+            renderEquityCurve(allTrades);
+
             const container = getEl('trades-list');
             if(!container) return;
 
-            if (allTrades.length === 0) {
+            const displayTrades = [...allTrades].sort((a,b) => new Date(b.date) - new Date(a.date));
+
+            if (displayTrades.length === 0) {
                 container.innerHTML = `<div class="text-center py-12 bg-white/5 rounded-3xl border border-dashed border-white/10"><p class="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Belum ada aktivitas</p></div>`;
             } else {
-                container.innerHTML = allTrades.map(t => `
+                container.innerHTML = displayTrades.map(t => `
                     <div class="bg-white/5 p-4 rounded-2xl mb-3 border border-white/5 hover:border-white/10 transition-all">
                         <div class="flex justify-between items-start">
                             <div class="flex items-center gap-3">
@@ -320,7 +367,6 @@
             for(let day=1; day<=lastDate; day++) {
                 const p = pnlByDate[day];
                 if (p !== undefined) currentWeekPnL += p;
-
                 const bg = p !== undefined ? (p > 0 ? 'bg-emerald-500/10 border-emerald-500/20' : 'bg-rose-500/10 border-rose-500/20') : 'bg-white/5 border-white/5';
                 
                 container.innerHTML += `
@@ -333,27 +379,15 @@
 
                 if (dayCount % 8 === 7) {
                     const wColor = currentWeekPnL > 0 ? 'text-emerald-400' : (currentWeekPnL < 0 ? 'text-rose-400' : 'text-slate-600');
-                    container.innerHTML += `
-                        <div class="aspect-square flex items-center justify-center rounded-xl bg-blue-500/5 border border-blue-500/10">
-                            <span class="${wColor} text-[8px] font-black text-center">${currentWeekPnL !== 0 ? (currentWeekPnL > 0 ? '+' : '') + currentWeekPnL.toFixed(1) : '-'}</span>
-                        </div>
-                    `;
+                    container.innerHTML += `<div class="aspect-square flex items-center justify-center rounded-xl bg-blue-500/5 border border-blue-500/10"><span class="${wColor} text-[8px] font-black text-center">${currentWeekPnL !== 0 ? (currentWeekPnL > 0 ? '+' : '') + currentWeekPnL.toFixed(1) : '-'}</span></div>`;
                     currentWeekPnL = 0;
                     dayCount++;
                 }
             }
 
-            while (dayCount % 8 !== 7) {
-                container.innerHTML += `<div></div>`;
-                dayCount++;
-            }
-            
+            while (dayCount % 8 !== 7) { container.innerHTML += `<div></div>`; dayCount++; }
             const finalWColor = currentWeekPnL > 0 ? 'text-emerald-400' : (currentWeekPnL < 0 ? 'text-rose-400' : 'text-slate-600');
-            container.innerHTML += `
-                <div class="aspect-square flex items-center justify-center rounded-xl bg-blue-500/5 border border-blue-500/10">
-                    <span class="${finalWColor} text-[8px] font-black text-center">${currentWeekPnL !== 0 ? (currentWeekPnL > 0 ? '+' : '') + currentWeekPnL.toFixed(1) : '-'}</span>
-                </div>
-            `;
+            container.innerHTML += `<div class="aspect-square flex items-center justify-center rounded-xl bg-blue-500/5 border border-blue-500/10"><span class="${finalWColor} text-[8px] font-black text-center">${currentWeekPnL !== 0 ? (currentWeekPnL > 0 ? '+' : '') + currentWeekPnL.toFixed(1) : '-'}</span></div>`;
 
             if (monthPnlDisplay) {
                 monthPnlDisplay.innerText = (monthTotalPnL >= 0 ? '+' : '') + monthTotalPnL.toLocaleString('id-ID', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -372,11 +406,17 @@
         textarea { resize: none; min-height: 80px; }
         .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); transition: transform 0.1s; }
         .btn-primary:active { transform: scale(0.97); }
+        
+        #equity-curve-svg path {
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 1000;
+            animation: dash 2s ease-out forwards;
+        }
+        @keyframes dash { to { stroke-dashoffset: 0; } }
     </style>
 </head>
-<body class="min-h-screen pb-24">
+<body class="min-h-screen pb-24 text-slate-200">
 
-    <!-- Modal Konfirmasi -->
     <div id="confirm-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[200] items-center justify-center p-6">
         <div class="bg-slate-900 border border-white/10 p-8 rounded-[2rem] w-full max-w-xs text-center space-y-6 shadow-2xl">
             <p id="modal-msg" class="text-sm font-bold text-white uppercase tracking-tight"></p>
@@ -387,210 +427,126 @@
         </div>
     </div>
 
-    <!-- Loading Screen -->
     <div id="loading-overlay" class="fixed inset-0 bg-slate-950 flex items-center justify-center z-[100]">
-        <div class="relative">
-            <div class="h-16 w-16 rounded-full border-t-2 border-b-2 border-blue-500 animate-spin"></div>
-            <div class="absolute inset-0 flex items-center justify-center">
-                <i data-lucide="trending-up" class="w-6 h-6 text-blue-500"></i>
-            </div>
-        </div>
+        <div class="h-16 w-16 rounded-full border-t-2 border-b-2 border-blue-500 animate-spin"></div>
     </div>
 
-    <!-- AUTH SECTION -->
     <section id="auth-section" class="hidden min-h-screen flex items-center justify-center p-8 bg-[radial-gradient(circle_at_top,#1e293b,transparent)]">
         <div class="w-full max-w-sm text-center">
-            <div class="mb-10 inline-block p-4 bg-blue-600/10 rounded-3xl border border-blue-500/20 rotate-3">
-                <i data-lucide="shield-check" class="text-blue-500 w-10 h-10 -rotate-3"></i>
-            </div>
+            <div class="mb-10 inline-block p-4 bg-blue-600/10 rounded-3xl border border-blue-500/20 rotate-3"><i data-lucide="shield-check" class="text-blue-500 w-10 h-10 -rotate-3"></i></div>
             <h1 id="auth-title" class="text-3xl font-black italic uppercase tracking-tighter mb-2 text-white">LOGIN</h1>
             <p class="text-slate-500 text-xs mb-8">Kelola perdagangan Anda dengan profesional</p>
-            
             <div class="space-y-4 text-left">
-                <div class="space-y-1">
-                    <label class="text-[10px] font-black text-slate-500 uppercase ml-2">Email</label>
-                    <input id="email" type="email" placeholder="email@contoh.com">
-                </div>
-                <div class="space-y-1">
-                    <label class="text-[10px] font-black text-slate-500 uppercase ml-2">Password</label>
-                    <div class="relative">
-                        <input id="password" type="password" placeholder="••••••••">
-                        <button onclick="togglePassword('password', 'pass-icon')" class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500">
-                            <i id="pass-icon" data-lucide="eye" class="w-4 h-4"></i>
-                        </button>
-                    </div>
-                </div>
+                <div class="space-y-1"><label class="text-[10px] font-black text-slate-500 uppercase ml-2">Email</label><input id="email" type="email" placeholder="email@contoh.com"></div>
+                <div class="space-y-1"><label class="text-[10px] font-black text-slate-500 uppercase ml-2">Password</label><div class="relative"><input id="password" type="password" placeholder="••••••••"><button onclick="togglePassword('password', 'pass-icon')" class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500"><i id="pass-icon" data-lucide="eye" class="w-4 h-4"></i></button></div></div>
                 <button id="auth-submit-btn" onclick="handleAuth()" class="w-full btn-primary py-4 rounded-2xl font-black shadow-xl shadow-blue-500/20 text-sm">MASUK</button>
-                
-                <div class="pt-4 space-y-3">
-                    <button onclick="toggleAuthMode()" id="auth-toggle-text" class="w-full text-slate-500 text-[11px] font-bold hover:text-blue-400 transition-colors">Belum punya akun? Daftar</button>
-                    <div class="flex items-center gap-4 py-2">
-                        <div class="h-px bg-slate-800 flex-1"></div>
-                        <span class="text-[9px] text-slate-600 font-black uppercase">Atau</span>
-                        <div class="h-px bg-slate-800 flex-1"></div>
-                    </div>
-                    <button onclick="handleGuestLogin()" class="w-full bg-white/5 border border-white/5 py-3 rounded-2xl font-black text-slate-400 text-[10px] uppercase tracking-widest hover:bg-white/10">Masuk sebagai Tamu</button>
-                </div>
+                <div class="pt-4 space-y-3"><button onclick="toggleAuthMode()" id="auth-toggle-text" class="w-full text-slate-500 text-[11px] font-bold hover:text-blue-400 transition-colors">Belum punya akun? Daftar</button><div class="flex items-center gap-4 py-2"><div class="h-px bg-slate-800 flex-1"></div><span class="text-[9px] text-slate-600 font-black uppercase">Atau</span><div class="h-px bg-slate-800 flex-1"></div></div><button onclick="handleGuestLogin()" class="w-full bg-white/5 border border-white/5 py-3 rounded-2xl font-black text-slate-400 text-[10px] uppercase tracking-widest hover:bg-white/10">Masuk sebagai Tamu</button></div>
             </div>
         </div>
     </section>
 
-    <!-- SETUP SECTION -->
-    <section id="account-section" class="hidden min-h-screen flex items-center justify-center p-6">
-        <div class="w-full max-w-sm glass p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
-            <h2 class="text-xl font-black mb-6 uppercase italic flex items-center gap-2">
-                <i data-lucide="settings-2" class="w-5 h-5 text-blue-500"></i> Setup Profil
-            </h2>
-            <form onsubmit="saveAccount(event)" class="space-y-5">
-                <input id="acc-name" placeholder="Nama Akun (Broker/Personal)" required>
-                <div class="space-y-1">
-                    <label class="text-[9px] font-black text-slate-500 uppercase ml-2">Modal Awal</label>
-                    <input id="acc-balance" type="number" step="0.01" placeholder="0.00" required>
-                </div>
-                <select id="acc-currency">
-                    <option value="USD">USD ($)</option>
-                    <option value="IDR">IDR (Rp)</option>
-                </select>
-                <button type="submit" class="w-full btn-primary py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg shadow-blue-500/20">Mulai Jurnal</button>
-            </form>
+    <!-- SETUP SECTION UPDATED WITH BACK BUTTON -->
+    <section id="account-section" class="hidden min-h-screen flex items-center justify-center p-6 bg-[radial-gradient(circle_at_bottom,#1e293b,transparent)]">
+        <div class="w-full max-w-sm">
+            <button onclick="logout()" class="mb-6 flex items-center gap-2 text-slate-500 hover:text-white transition-colors text-[10px] font-black uppercase tracking-widest group">
+                <i data-lucide="arrow-left" class="w-4 h-4 group-hover:-translate-x-1 transition-transform"></i> Kembali ke Login
+            </button>
+            <div class="glass p-8 rounded-[2.5rem] border border-white/5 shadow-2xl">
+                <h2 class="text-xl font-black mb-6 uppercase italic flex items-center gap-2 text-white">
+                    <i data-lucide="settings-2" class="w-5 h-5 text-blue-500"></i> Setup Profil
+                </h2>
+                <form onsubmit="saveAccount(event)" class="space-y-5">
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-slate-500 uppercase ml-2">Identitas Portofolio</label>
+                        <input id="acc-name" placeholder="Nama Akun (Broker/Personal)" required>
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-slate-500 uppercase ml-2">Modal Awal</label>
+                        <input id="acc-balance" type="number" step="0.01" placeholder="0.00" required>
+                    </div>
+                    <div class="space-y-1">
+                        <label class="text-[9px] font-black text-slate-500 uppercase ml-2">Mata Uang</label>
+                        <select id="acc-currency"><option value="USD">USD ($)</option><option value="IDR">IDR (Rp)</option></select>
+                    </div>
+                    <button type="submit" class="w-full btn-primary py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg shadow-blue-500/20 mt-4 text-white">Mulai Jurnal</button>
+                </form>
+            </div>
         </div>
     </section>
 
-    <!-- DASHBOARD -->
     <section id="dashboard-section" class="hidden p-6 max-w-2xl mx-auto space-y-6">
         <div class="flex justify-between items-center">
             <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-                    <i data-lucide="user" class="w-5 h-5 text-white"></i>
-                </div>
-                <div>
-                    <p class="text-[10px] font-black text-slate-500 uppercase tracking-widest">Akun Aktif</p>
-                    <h1 id="display-acc-name" class="text-sm font-bold text-white uppercase italic">Trader</h1>
-                </div>
+                <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20"><i data-lucide="user" class="w-5 h-5 text-white"></i></div>
+                <div><p class="text-[10px] font-black text-slate-500 uppercase tracking-widest">Akun Aktif</p><h1 id="display-acc-name" class="text-sm font-bold text-white uppercase italic">Trader</h1></div>
             </div>
             <button onclick="logout()" class="w-10 h-10 bg-white/5 border border-white/5 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-500 transition-colors"><i data-lucide="power" class="w-4 h-4"></i></button>
         </div>
 
-        <!-- Kartu Utama -->
-        <div class="relative overflow-hidden bg-gradient-to-br from-blue-600 to-indigo-900 p-8 rounded-[2.5rem] shadow-2xl shadow-blue-900/30">
-            <div class="absolute top-0 right-0 p-8 opacity-10">
-                <i data-lucide="wallet" class="w-32 h-32"></i>
-            </div>
-            <p class="text-blue-100/60 text-[10px] font-black uppercase tracking-[0.2em] mb-2">Total Equity</p>
-            <h2 class="text-4xl font-black mb-8 tracking-tighter text-white"><span class="val-balance">0</span></h2>
-            <div class="grid grid-cols-2 gap-4">
-                <div class="bg-black/20 backdrop-blur-md p-4 rounded-2xl border border-white/5">
-                    <p class="text-white/40 text-[8px] font-black uppercase mb-1 tracking-widest">Growth</p>
-                    <p class="val-pnl font-black text-lg">+0</p>
+        <div class="relative overflow-hidden bg-gradient-to-br from-blue-600 to-indigo-900 rounded-[2.5rem] shadow-2xl shadow-blue-900/30">
+            <div class="p-8 relative z-10">
+                <p class="text-blue-100/60 text-[10px] font-black uppercase tracking-[0.2em] mb-2">Total Equity</p>
+                <h2 class="text-4xl font-black mb-10 tracking-tighter text-white"><span class="val-balance">0</span></h2>
+                <div class="w-full h-24 mt-4 relative">
+                    <svg id="equity-curve-svg" viewBox="0 0 400 100" preserveAspectRatio="none" class="w-full h-full"></svg>
                 </div>
-                <div class="bg-black/20 backdrop-blur-md p-4 rounded-2xl border border-white/5">
-                    <p class="text-white/40 text-[8px] font-black uppercase mb-1 tracking-widest">Win Rate</p>
-                    <p id="val-winrate" class="font-black text-lg text-white">0%</p>
+                <div class="grid grid-cols-2 gap-4 mt-6">
+                    <div class="bg-black/20 backdrop-blur-md p-4 rounded-2xl border border-white/5"><p class="text-white/40 text-[8px] font-black uppercase mb-1 tracking-widest">Growth</p><p class="val-pnl font-black text-lg">+0</p></div>
+                    <div class="bg-black/20 backdrop-blur-md p-4 rounded-2xl border border-white/5"><p class="text-white/40 text-[8px] font-black uppercase mb-1 tracking-widest">Win Rate</p><p id="val-winrate" class="font-black text-lg text-white">0%</p></div>
                 </div>
             </div>
+            <div class="absolute -bottom-10 -right-10 w-40 h-40 bg-blue-400/20 blur-[80px]"></div>
         </div>
 
         <div class="grid grid-cols-2 gap-4">
-            <div class="bg-white/5 border border-white/5 p-5 rounded-3xl flex flex-col items-center justify-center">
-                <p class="text-slate-500 text-[9px] font-black uppercase tracking-widest mb-1">Total Trades</p>
-                <p id="val-total-trades" class="text-xl font-black">0</p>
-            </div>
-            <button onclick="deleteAllTrades()" class="bg-white/5 border border-white/5 p-5 rounded-3xl flex flex-col items-center justify-center group">
-                <i data-lucide="refresh-ccw" class="w-4 h-4 text-rose-500/50 group-hover:rotate-180 transition-transform duration-500 mb-1"></i>
-                <span class="text-rose-500/80 text-[9px] font-black uppercase tracking-widest">Reset Data</span>
-            </button>
+            <div class="bg-white/5 border border-white/5 p-5 rounded-3xl flex flex-col items-center justify-center"><p class="text-slate-500 text-[9px] font-black uppercase tracking-widest mb-1">Total Trades</p><p id="val-total-trades" class="text-xl font-black">0</p></div>
+            <button onclick="deleteAllTrades()" class="bg-white/5 border border-white/5 p-5 rounded-3xl flex flex-col items-center justify-center group"><i data-lucide="refresh-ccw" class="w-4 h-4 text-rose-500/50 group-hover:rotate-180 transition-transform duration-500 mb-1"></i><span class="text-rose-500/80 text-[9px] font-black uppercase tracking-widest">Reset Data</span></button>
         </div>
 
         <button onclick="navigateTo('journal')" class="w-full btn-primary p-5 rounded-[2rem] flex items-center justify-between shadow-xl shadow-blue-500/10 group">
-            <div class="flex items-center gap-4">
-                <div class="bg-white/20 w-10 h-10 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform"><i data-lucide="plus" class="w-5 h-5"></i></div>
-                <span class="font-black uppercase italic tracking-tight">Open New Journal</span>
-            </div>
+            <div class="flex items-center gap-4"><div class="bg-white/20 w-10 h-10 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform"><i data-lucide="plus" class="w-5 h-5 text-white"></i></div><span class="font-black uppercase italic tracking-tight text-white">Open New Journal</span></div>
             <i data-lucide="chevron-right" class="w-5 h-5 text-white/40"></i>
         </button>
     </section>
 
-    <!-- RECAP SECTION -->
     <section id="recap-section" class="hidden p-6 max-w-2xl mx-auto space-y-6">
         <div class="flex items-center justify-between">
-            <h2 class="text-xl font-black uppercase italic tracking-tight flex items-center gap-2">
-                <i data-lucide="calendar" class="w-5 h-5 text-blue-500"></i> Trading Recap
-            </h2>
+            <h2 class="text-xl font-black uppercase italic tracking-tight flex items-center gap-2"><i data-lucide="calendar" class="w-5 h-5 text-blue-500"></i> Trading Recap</h2>
             <div class="flex items-center gap-2 bg-white/5 p-1.5 rounded-xl border border-white/5">
                 <button onclick="changeMonth(-1)" class="p-1.5 hover:bg-white/10 rounded-lg"><i data-lucide="chevron-left" class="w-4 h-4 text-slate-400"></i></button>
                 <span id="current-month-label" class="text-[9px] font-black uppercase tracking-widest w-24 text-center text-slate-200">BULAN</span>
                 <button onclick="changeMonth(1)" class="p-1.5 hover:bg-white/10 rounded-lg"><i data-lucide="chevron-right" class="w-4 h-4 text-slate-400"></i></button>
             </div>
         </div>
-        
         <div id="calendar-grid" class="grid grid-cols-8 gap-1.5 bg-white/5 p-4 rounded-[2rem] border border-white/5"></div>
-        
-        <div class="bg-white/5 border border-white/5 p-6 rounded-[2rem] flex flex-col items-center justify-center">
-            <p class="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-1">Monthly Performance</p>
-            <div id="month-pnl-display" class="text-lg font-black">+0.0</div>
-        </div>
-
-        <div class="flex gap-4 px-2 justify-center">
-            <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-emerald-500 shadow-sm shadow-emerald-500/50"></div> <span class="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Profit Day</span></div>
-            <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-rose-500 shadow-sm shadow-rose-500/50"></div> <span class="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Loss Day</span></div>
-            <div class="flex items-center gap-2"><div class="w-2 h-2 rounded-full bg-blue-500 shadow-sm shadow-blue-500/50"></div> <span class="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Weekly Total</span></div>
-        </div>
+        <div class="bg-white/5 border border-white/5 p-6 rounded-[2rem] flex flex-col items-center justify-center"><p class="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-1">Monthly Performance</p><div id="month-pnl-display" class="text-lg font-black">+0.0</div></div>
     </section>
 
-    <!-- JOURNAL SECTION -->
     <section id="journal-section" class="hidden p-6 max-w-2xl mx-auto space-y-8">
-        <h2 class="text-xl font-black uppercase italic tracking-tight flex items-center gap-2">
-            <i data-lucide="book-marked" class="w-5 h-5 text-blue-500"></i> Trade Logs
-        </h2>
-        
+        <h2 class="text-xl font-black uppercase italic tracking-tight flex items-center gap-2"><i data-lucide="book-marked" class="w-5 h-5 text-blue-500"></i> Trade Logs</h2>
         <form onsubmit="addTrade(event)" class="bg-white/5 p-6 rounded-[2.5rem] border border-white/5 space-y-4">
-            <div class="space-y-1">
-                <label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Waktu Trade</label>
-                <input id="t-date" type="datetime-local" required>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-                <input id="t-pair" placeholder="Simbol (Contoh: GOLD)" required>
-                <select id="t-type" class="font-bold">
-                    <option value="BUY">BUY</option>
-                    <option value="SELL">SELL</option>
-                </select>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-                <input id="t-entry" type="number" step="0.0000001" placeholder="Entry Price">
-                <input id="t-exit" type="number" step="0.0000001" placeholder="Exit Price">
-            </div>
-            <div class="space-y-1">
-                <label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Hasil Akhir (PnL)</label>
-                <input id="t-pnl" type="number" step="0.01" placeholder="Cth: 50.5" required class="border-blue-500/30">
-            </div>
-            <div class="space-y-1">
-                <label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Catatan Perdagangan</label>
-                <textarea id="t-notes" placeholder="Tuliskan alasan entry atau evaluasi trade ini..."></textarea>
-            </div>
-            <button type="submit" class="w-full btn-primary py-4 rounded-2xl font-black uppercase text-xs shadow-lg tracking-widest mt-2">Commit Trade</button>
+            <div class="space-y-1"><label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Waktu Trade</label><input id="t-date" type="datetime-local" required></div>
+            <div class="grid grid-cols-2 gap-3"><input id="t-pair" placeholder="Simbol (Contoh: GOLD)" required><select id="t-type" class="font-bold"><option value="BUY">BUY</option><option value="SELL">SELL</option></select></div>
+            <div class="grid grid-cols-2 gap-3"><input id="t-entry" type="number" step="0.0000001" placeholder="Entry Price"><input id="t-exit" type="number" step="0.0000001" placeholder="Exit Price"></div>
+            <div class="space-y-1"><label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Hasil Akhir (PnL)</label><input id="t-pnl" type="number" step="0.01" placeholder="Cth: 50.5" required class="border-blue-500/30"></div>
+            <div class="space-y-1"><label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Catatan</label><textarea id="t-notes" placeholder="Berikan alasan entry, emosi, atau evaluasi..."></textarea></div>
+            <button type="submit" class="w-full btn-primary py-4 rounded-2xl font-black uppercase text-xs shadow-lg tracking-widest mt-2 text-white">Commit Trade</button>
         </form>
-
-        <div id="trades-list" class="space-y-3"></div>
+        <div id="trades-list" class="space-y-3 pb-20"></div>
     </section>
 
-    <!-- NAVIGATION BAR -->
     <nav id="main-nav" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 glass w-[90%] max-w-sm border border-white/10 rounded-[2.5rem] p-2 flex justify-between z-50 shadow-2xl">
         <button onclick="navigateTo('dashboard')" data-target="dashboard" class="nav-link flex-1 flex flex-col items-center gap-1 py-2">
-            <i data-lucide="layout-dashboard" class="w-5 h-5 text-blue-400"></i>
-            <span class="text-[8px] font-black uppercase text-blue-400 tracking-widest">Home</span>
+            <i data-lucide="layout-dashboard" class="w-5 h-5 text-blue-400"></i><span class="text-[8px] font-black uppercase text-blue-400 tracking-widest">Home</span>
         </button>
         <button onclick="navigateTo('recap')" data-target="recap" class="nav-link flex-1 flex flex-col items-center gap-1 py-2">
-            <i data-lucide="calendar-days" class="w-5 h-5 text-slate-500"></i>
-            <span class="text-[8px] font-black uppercase text-slate-500 tracking-widest">Recap</span>
+            <i data-lucide="calendar-days" class="w-5 h-5 text-slate-500"></i><span class="text-[8px] font-black uppercase text-slate-500 tracking-widest">Recap</span>
         </button>
         <button onclick="navigateTo('journal')" data-target="journal" class="nav-link flex-1 flex flex-col items-center gap-1 py-2">
-            <i data-lucide="pencil-line" class="w-5 h-5 text-slate-500"></i>
-            <span class="text-[8px] font-black uppercase text-slate-500 tracking-widest">Journal</span>
+            <i data-lucide="pencil-line" class="w-5 h-5 text-slate-500"></i><span class="text-[8px] font-black uppercase text-slate-500 tracking-widest">Journal</span>
         </button>
     </nav>
 
-    <script>
-        window.onload = () => { lucide.createIcons(); };
-    </script>
+    <script> window.onload = () => { lucide.createIcons(); }; </script>
 </body>
 </html>
