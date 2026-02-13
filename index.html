@@ -9,7 +9,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, deleteDoc, query, orderBy, writeBatch, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, updateDoc, onSnapshot, deleteDoc, query, orderBy, writeBatch, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyADD7hRJUGKdkuIiLZHK96wHSmz0FDMyWI",
@@ -30,7 +30,8 @@
         let unsubscribeTrades = null;
         let allTrades = [];
         let currentCalendarDate = new Date();
-        let selectedImageBase64 = null; // New state for image
+        let selectedImageBase64 = null;
+        let editingTradeId = null;
 
         const getEl = (id) => document.getElementById(id);
 
@@ -76,9 +77,11 @@
 
         function setDefaultDate() {
             const now = new Date();
-            now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+            const year = now.getFullYear();
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
             const dateInput = getEl('t-date');
-            if (dateInput) dateInput.value = now.toISOString().slice(0, 16);
+            if (dateInput && !editingTradeId) dateInput.value = `${year}-${month}-${day}`;
         }
 
         window.handleAuth = async () => {
@@ -152,7 +155,7 @@
                 allTrades = [];
                 snapshot.forEach(doc => allTrades.push({id: doc.id, ...doc.data()}));
                 updateUI();
-                showSection('dashboard-section');
+                if(!editingTradeId) showSection('dashboard-section');
                 updateNavIcons('dashboard');
             });
         }
@@ -169,6 +172,7 @@
         }
 
         window.navigateTo = (target) => {
+            if(target === 'journal' && !editingTradeId) resetTradeForm();
             showSection(target + '-section');
             updateNavIcons(target);
         };
@@ -220,9 +224,13 @@
 
         function updateUI() {
             const totalPnL = allTrades.reduce((sum, t) => sum + t.pnl, 0);
-            const currentBalance = (accountData?.balance || 0) + totalPnL;
+            const initialBalance = accountData?.balance || 0;
+            const currentBalance = initialBalance + totalPnL;
             const wins = allTrades.filter(t => t.pnl > 0).length;
             const winRate = allTrades.length > 0 ? ((wins / allTrades.length) * 100).toFixed(1) : 0;
+            
+            // Hitung persentase pertumbuhan akun
+            const growthPercentage = initialBalance > 0 ? ((totalPnL / initialBalance) * 100).toFixed(2) : 0;
 
             document.querySelectorAll('.val-balance').forEach(el => el.innerText = currentBalance.toLocaleString('id-ID'));
             document.querySelectorAll('.val-pnl').forEach(el => {
@@ -230,6 +238,12 @@
                 el.className = `val-pnl font-black text-xl ${totalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
             });
             
+            // Update persentase pertumbuhan di UI
+            if(getEl('val-growth-pct')) {
+                getEl('val-growth-pct').innerText = (totalPnL >= 0 ? '+' : '') + growthPercentage + '%';
+                getEl('val-growth-pct').className = `text-[9px] font-black ${totalPnL >= 0 ? 'text-emerald-400/80' : 'text-rose-400/80'} ml-1`;
+            }
+
             if(getEl('val-winrate')) getEl('val-winrate').innerText = winRate + '%';
             if(getEl('val-total-trades')) getEl('val-total-trades').innerText = allTrades.length;
             if(getEl('display-acc-name')) getEl('display-acc-name').innerText = accountData?.name || "Trader";
@@ -237,51 +251,79 @@
             renderEquityCurve(allTrades);
 
             const container = getEl('trades-list');
+            const dashboardContainer = getEl('dashboard-trades-list');
             if(!container) return;
 
             const displayTrades = [...allTrades].sort((a,b) => new Date(b.date) - new Date(a.date));
 
-            if (displayTrades.length === 0) {
-                container.innerHTML = `<div class="text-center py-12 bg-white/5 rounded-3xl border border-dashed border-white/10"><p class="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Belum ada aktivitas</p></div>`;
-            } else {
-                container.innerHTML = displayTrades.map(t => `
-                    <div class="bg-white/5 p-4 rounded-2xl mb-3 border border-white/5 hover:border-white/10 transition-all">
-                        <div class="flex justify-between items-start">
-                            <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 rounded-xl flex items-center justify-center ${t.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}">
-                                    <i data-lucide="${t.pnl >= 0 ? 'trending-up' : 'trending-down'}" class="w-5 h-5"></i>
-                                </div>
-                                <div>
-                                    <p class="font-bold text-white text-sm">${t.pair} <span class="text-[8px] ml-1 px-1.5 py-0.5 rounded font-black ${t.type === 'BUY' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400'}">${t.type}</span></p>
-                                    <p class="text-[9px] text-slate-500">${new Date(t.date).toLocaleString('id-ID', {dateStyle:'medium', timeStyle:'short'})}</p>
-                                </div>
+            const renderTradeItem = (t) => `
+                <div class="bg-white/5 p-4 rounded-2xl mb-3 border border-white/5 hover:border-white/10 transition-all">
+                    <div class="flex justify-between items-start">
+                        <div class="flex items-center gap-3 cursor-pointer flex-1" onclick="showTradeDetail('${t.id}')">
+                            <div class="w-10 h-10 rounded-xl flex items-center justify-center ${t.pnl >= 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-rose-500/10 text-rose-500'}">
+                                <i data-lucide="${t.pnl >= 0 ? 'trending-up' : 'trending-down'}" class="w-5 h-5"></i>
                             </div>
-                            <div class="text-right">
-                                <p class="font-black text-sm ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString('id-ID')}</p>
-                                <button onclick="deleteTrade('${t.id}')" class="text-slate-600 hover:text-rose-500 transition-colors mt-1"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
+                            <div>
+                                <p class="font-bold text-white text-sm">${t.pair} <span class="text-[8px] ml-1 px-1.5 py-0.5 rounded font-black ${t.type === 'BUY' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400'}">${t.type}</span></p>
+                                <p class="text-[9px] text-slate-500">${new Date(t.date).toLocaleDateString('id-ID', {dateStyle:'medium'})}</p>
                             </div>
                         </div>
-                        ${t.notes ? `
-                        <div class="mt-3 pt-2 border-t border-white/5">
-                            <p class="text-[10px] text-slate-400 italic bg-black/20 p-2 rounded-lg leading-relaxed"><span class="text-blue-500 not-italic font-black text-[8px] uppercase mr-1">Notes:</span> ${t.notes}</p>
+                        <div class="text-right flex flex-col items-end gap-1">
+                            <p class="font-black text-sm ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${t.pnl >= 0 ? '+' : ''}${t.pnl.toLocaleString('id-ID')}</p>
+                            <div class="flex gap-2">
+                                <button onclick="editTrade('${t.id}')" class="text-slate-600 hover:text-blue-400 transition-colors"><i data-lucide="edit-3" class="w-3 h-3"></i></button>
+                                <button onclick="deleteTrade('${t.id}')" class="text-slate-600 hover:text-rose-500 transition-colors"><i data-lucide="trash-2" class="w-3 h-3"></i></button>
+                            </div>
                         </div>
-                        ` : ''}
-                        ${t.image ? `
-                        <div class="mt-3 overflow-hidden rounded-xl border border-white/10">
-                            <img src="${t.image}" class="w-full h-auto object-cover opacity-80 hover:opacity-100 transition-opacity cursor-zoom-in" onclick="window.open(this.src)">
-                        </div>
-                        ` : ''}
                     </div>
-                `).join('');
+                </div>
+            `;
+
+            if (displayTrades.length === 0) {
+                const emptyMsg = `<div class="text-center py-12 bg-white/5 rounded-3xl border border-dashed border-white/10"><p class="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Belum ada aktivitas</p></div>`;
+                container.innerHTML = emptyMsg;
+                if(dashboardContainer) dashboardContainer.innerHTML = emptyMsg;
+            } else {
+                container.innerHTML = displayTrades.map(t => renderTradeItem(t)).join('');
+                if(dashboardContainer) dashboardContainer.innerHTML = displayTrades.slice(0, 3).map(t => renderTradeItem(t)).join('');
             }
             lucide.createIcons();
         }
 
+        window.showTradeDetail = (id) => {
+            const t = allTrades.find(trade => trade.id === id);
+            if(!t) return;
+            
+            getEl('detail-pair').innerText = t.pair;
+            getEl('detail-type').innerText = t.type;
+            getEl('detail-type').className = `text-[10px] px-2 py-0.5 rounded font-black ${t.type === 'BUY' ? 'bg-blue-500/20 text-blue-400' : 'bg-orange-500/20 text-orange-400'}`;
+            getEl('detail-date').innerText = new Date(t.date).toLocaleDateString('id-ID', { dateStyle: 'full' });
+            getEl('detail-entry').innerText = t.entry || '-';
+            getEl('detail-exit').innerText = t.exit || '-';
+            getEl('detail-pnl').innerText = (t.pnl >= 0 ? '+' : '') + t.pnl.toLocaleString('id-ID');
+            getEl('detail-pnl').className = `text-lg font-black ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+            getEl('detail-notes').innerText = t.notes || 'Tidak ada catatan.';
+            
+            const imgContainer = getEl('detail-image-container');
+            if(t.image) {
+                imgContainer.innerHTML = `<img src="${t.image}" class="w-full rounded-xl border border-white/10 mt-2 shadow-lg">`;
+                imgContainer.classList.remove('hidden');
+            } else {
+                imgContainer.classList.add('hidden');
+            }
+
+            getEl('detail-modal').classList.replace('hidden', 'flex');
+        };
+
+        window.hideTradeDetail = () => {
+            getEl('detail-modal').classList.replace('flex', 'hidden');
+        };
+
         window.handleImageUpload = (event) => {
             const file = event.target.files[0];
             if (!file) return;
-            if (file.size > 1024 * 1024) { // Limit 1MB for Firestore Document
-                showConfirmModal(`<span class="text-rose-500">Gambar Terlalu Besar</span><br><span class="text-[10px]">Max 1MB untuk performa optimal.</span>`, () => {});
+            if (file.size > 800 * 1024) { 
+                showConfirmModal(`<span class="text-rose-500">Gambar Terlalu Besar</span><br><span class="text-[10px]">Max 800KB untuk performa optimal.</span>`, () => {});
                 event.target.value = '';
                 return;
             }
@@ -300,6 +342,43 @@
             getEl('t-image').value = '';
         }
 
+        window.editTrade = (id) => {
+            const t = allTrades.find(trade => trade.id === id);
+            if(!t) return;
+            
+            editingTradeId = id;
+            getEl('journal-title').innerText = "Edit Trade";
+            getEl('commit-btn').innerText = "Update Trade";
+            
+            getEl('t-date').value = t.date;
+            getEl('t-pair').value = t.pair;
+            getEl('t-type').value = t.type;
+            getEl('t-entry').value = t.entry;
+            getEl('t-exit').value = t.exit;
+            getEl('t-pnl').value = t.pnl;
+            getEl('t-notes').value = t.notes;
+            
+            if(t.image) {
+                selectedImageBase64 = t.image;
+                getEl('image-preview').src = t.image;
+                getEl('image-preview-container').classList.remove('hidden');
+            } else {
+                removeSelectedImage();
+            }
+
+            navigateTo('journal');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        window.resetTradeForm = () => {
+            editingTradeId = null;
+            getEl('journal-title').innerText = "Trade Logs";
+            getEl('commit-btn').innerText = "Commit Trade";
+            getEl('trade-form').reset();
+            removeSelectedImage();
+            setDefaultDate();
+        };
+
         window.addTrade = async (e) => {
             e.preventDefault();
             getEl('loading-overlay').classList.remove('hidden');
@@ -311,12 +390,15 @@
                 pnl: parseFloat(getEl('t-pnl').value) || 0,
                 notes: getEl('t-notes').value || "",
                 image: selectedImageBase64 || null,
-                date: new Date(getEl('t-date').value).toISOString()
+                date: getEl('t-date').value
             };
             try {
-                await addDoc(collection(db, "users", currentUser.uid, "trades"), trade);
-                e.target.reset();
-                removeSelectedImage();
+                if(editingTradeId) {
+                    await updateDoc(doc(db, "users", currentUser.uid, "trades", editingTradeId), trade);
+                } else {
+                    await addDoc(collection(db, "users", currentUser.uid, "trades"), trade);
+                }
+                resetTradeForm();
                 navigateTo('dashboard');
             } catch (e) { console.error(e); }
             finally { getEl('loading-overlay').classList.add('hidden'); }
@@ -377,7 +459,8 @@
             allTrades.forEach(t => {
                 const d = new Date(t.date);
                 if(d.getFullYear() === year && d.getMonth() === month) {
-                    pnlByDate[d.getDate()] = (pnlByDate[d.getDate()] || 0) + t.pnl;
+                    const dayKey = d.getDate();
+                    pnlByDate[dayKey] = (pnlByDate[dayKey] || 0) + t.pnl;
                     monthTotalPnL += t.pnl;
                 }
             });
@@ -435,7 +518,7 @@
         input, select, textarea { background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 1rem; padding: 0.75rem 1rem; color: #f1f5f9; width: 100%; font-size: 0.85rem; transition: all 0.2s; }
         input:focus, textarea:focus { outline: none; border-color: #3b82f6; background: rgba(30, 41, 59, 0.8); }
         textarea { resize: none; min-height: 80px; }
-        .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); transition: transform 0.1s; }
+        .btn-primary { background: linear-gradient(135deg, #3b82f6, #2563eb); transition: transform 0.1s; color: white; }
         .btn-primary:active { transform: scale(0.97); }
         
         #equity-curve-svg path {
@@ -448,6 +531,48 @@
 </head>
 <body class="min-h-screen pb-24 text-slate-200">
 
+    <!-- MODAL DETAIL TRADE -->
+    <div id="detail-modal" class="hidden fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[200] items-center justify-center p-6">
+        <div class="bg-slate-900 border border-white/10 rounded-[2.5rem] w-full max-w-sm overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+            <div class="p-6 overflow-y-auto">
+                <div class="flex justify-between items-center mb-6">
+                    <div>
+                        <h3 id="detail-pair" class="text-2xl font-black text-white italic">GOLD</h3>
+                        <span id="detail-type">BUY</span>
+                    </div>
+                    <button onclick="hideTradeDetail()" class="w-10 h-10 bg-white/5 rounded-full flex items-center justify-center text-slate-400"><i data-lucide="x" class="w-5 h-5"></i></button>
+                </div>
+                
+                <div class="space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-white/5 p-3 rounded-2xl">
+                            <p class="text-[8px] font-black uppercase text-slate-500 mb-1">Entry Price</p>
+                            <p id="detail-entry" class="font-bold text-white">-</p>
+                        </div>
+                        <div class="bg-white/5 p-3 rounded-2xl">
+                            <p class="text-[8px] font-black uppercase text-slate-500 mb-1">Exit Price</p>
+                            <p id="detail-exit" class="font-bold text-white">-</p>
+                        </div>
+                    </div>
+                    <div class="bg-white/5 p-4 rounded-2xl flex justify-between items-center">
+                        <p class="text-[8px] font-black uppercase text-slate-500">Hasil PnL</p>
+                        <p id="detail-pnl" class="text-xl font-black">+0</p>
+                    </div>
+                    <div class="bg-white/5 p-4 rounded-2xl">
+                        <p class="text-[8px] font-black uppercase text-slate-500 mb-2">Tanggal Eksekusi</p>
+                        <p id="detail-date" class="text-[10px] font-bold text-white uppercase italic">-</p>
+                    </div>
+                    <div class="bg-white/5 p-4 rounded-2xl">
+                        <p class="text-[8px] font-black uppercase text-slate-500 mb-2">Evaluasi & Catatan</p>
+                        <p id="detail-notes" class="text-xs text-slate-300 leading-relaxed"></p>
+                    </div>
+                    <div id="detail-image-container" class="hidden"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL KONFIRMASI -->
     <div id="confirm-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-[200] items-center justify-center p-6">
         <div class="bg-slate-900 border border-white/10 p-8 rounded-[2rem] w-full max-w-xs text-center space-y-6 shadow-2xl">
             <p id="modal-msg" class="text-sm font-bold text-white uppercase tracking-tight"></p>
@@ -462,6 +587,7 @@
         <div class="h-16 w-16 rounded-full border-t-2 border-b-2 border-blue-500 animate-spin"></div>
     </div>
 
+    <!-- AUTH SECTION -->
     <section id="auth-section" class="hidden min-h-screen flex items-center justify-center p-8 bg-[radial-gradient(circle_at_top,#1e293b,transparent)]">
         <div class="w-full max-w-sm text-center">
             <div class="mb-10 inline-block p-4 bg-blue-600/10 rounded-3xl border border-blue-500/20 rotate-3"><i data-lucide="shield-check" class="text-blue-500 w-10 h-10 -rotate-3"></i></div>
@@ -476,6 +602,7 @@
         </div>
     </section>
 
+    <!-- SETUP ACCOUNT SECTION -->
     <section id="account-section" class="hidden min-h-screen flex items-center justify-center p-6 bg-[radial-gradient(circle_at_bottom,#1e293b,transparent)]">
         <div class="w-full max-w-sm">
             <button onclick="logout()" class="mb-6 flex items-center gap-2 text-slate-500 hover:text-white transition-colors text-[10px] font-black uppercase tracking-widest group">
@@ -504,6 +631,7 @@
         </div>
     </section>
 
+    <!-- DASHBOARD SECTION -->
     <section id="dashboard-section" class="hidden p-6 max-w-2xl mx-auto space-y-6">
         <div class="flex justify-between items-center">
             <div class="flex items-center gap-3">
@@ -513,6 +641,7 @@
             <button onclick="logout()" class="w-10 h-10 bg-white/5 border border-white/5 rounded-xl flex items-center justify-center text-slate-400 hover:text-rose-500 transition-colors"><i data-lucide="power" class="w-4 h-4"></i></button>
         </div>
 
+        <!-- EQUITY CARD -->
         <div class="relative overflow-hidden bg-gradient-to-br from-blue-600 to-indigo-900 rounded-[2.5rem] shadow-2xl shadow-blue-900/30">
             <div class="p-8 relative z-10">
                 <p class="text-blue-100/60 text-[10px] font-black uppercase tracking-[0.2em] mb-2">Total Equity</p>
@@ -521,24 +650,35 @@
                     <svg id="equity-curve-svg" viewBox="0 0 400 100" preserveAspectRatio="none" class="w-full h-full"></svg>
                 </div>
                 <div class="grid grid-cols-2 gap-4 mt-6">
-                    <div class="bg-black/20 backdrop-blur-md p-4 rounded-2xl border border-white/5"><p class="text-white/40 text-[8px] font-black uppercase mb-1 tracking-widest">Growth</p><p class="val-pnl font-black text-lg">+0</p></div>
+                    <div class="bg-black/20 backdrop-blur-md p-4 rounded-2xl border border-white/5">
+                        <div class="flex items-center justify-between mb-1">
+                            <p class="text-white/40 text-[8px] font-black uppercase tracking-widest">Growth</p>
+                            <span id="val-growth-pct" class="text-[9px] font-black text-emerald-400/80 ml-1">+0%</span>
+                        </div>
+                        <p class="val-pnl font-black text-lg">+0</p>
+                    </div>
                     <div class="bg-black/20 backdrop-blur-md p-4 rounded-2xl border border-white/5"><p class="text-white/40 text-[8px] font-black uppercase mb-1 tracking-widest">Win Rate</p><p id="val-winrate" class="font-black text-lg text-white">0%</p></div>
                 </div>
             </div>
             <div class="absolute -bottom-10 -right-10 w-40 h-40 bg-blue-400/20 blur-[80px]"></div>
         </div>
 
-        <div class="grid grid-cols-2 gap-4">
-            <div class="bg-white/5 border border-white/5 p-5 rounded-3xl flex flex-col items-center justify-center"><p class="text-slate-500 text-[9px] font-black uppercase tracking-widest mb-1">Total Trades</p><p id="val-total-trades" class="text-xl font-black">0</p></div>
-            <button onclick="deleteAllTrades()" class="bg-white/5 border border-white/5 p-5 rounded-3xl flex flex-col items-center justify-center group"><i data-lucide="refresh-ccw" class="w-4 h-4 text-rose-500/50 group-hover:rotate-180 transition-transform duration-500 mb-1"></i><span class="text-rose-500/80 text-[9px] font-black uppercase tracking-widest">Reset Data</span></button>
+        <!-- RECENT TRADES AT DASHBOARD -->
+        <div class="space-y-4">
+            <div class="flex justify-between items-center">
+                <h3 class="text-[10px] font-black text-slate-500 uppercase tracking-widest">Aktivitas Terakhir</h3>
+                <button onclick="navigateTo('journal')" class="text-[10px] font-black text-blue-400 uppercase tracking-widest">Lihat Semua</button>
+            </div>
+            <div id="dashboard-trades-list" class="space-y-3"></div>
         </div>
 
-        <button onclick="navigateTo('journal')" class="w-full btn-primary p-5 rounded-[2rem] flex items-center justify-between shadow-xl shadow-blue-500/10 group">
+        <button onclick="navigateTo('journal')" class="w-full btn-primary p-5 rounded-[2rem] flex items-center justify-between shadow-xl shadow-blue-500/10 group text-white">
             <div class="flex items-center gap-4"><div class="bg-white/20 w-10 h-10 rounded-xl flex items-center justify-center group-hover:scale-110 transition-transform"><i data-lucide="plus" class="w-5 h-5 text-white"></i></div><span class="font-black uppercase italic tracking-tight text-white">Open New Journal</span></div>
             <i data-lucide="chevron-right" class="w-5 h-5 text-white/40"></i>
         </button>
     </section>
 
+    <!-- RECAP SECTION -->
     <section id="recap-section" class="hidden p-6 max-w-2xl mx-auto space-y-6">
         <div class="flex items-center justify-between">
             <h2 class="text-xl font-black uppercase italic tracking-tight flex items-center gap-2"><i data-lucide="calendar" class="w-5 h-5 text-blue-500"></i> Trading Recap</h2>
@@ -552,14 +692,15 @@
         <div class="bg-white/5 border border-white/5 p-6 rounded-[2rem] flex flex-col items-center justify-center"><p class="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-1">Monthly Performance</p><div id="month-pnl-display" class="text-lg font-black">+0.0</div></div>
     </section>
 
+    <!-- JOURNAL SECTION -->
     <section id="journal-section" class="hidden p-6 max-w-2xl mx-auto space-y-8">
-        <h2 class="text-xl font-black uppercase italic tracking-tight flex items-center gap-2"><i data-lucide="book-marked" class="w-5 h-5 text-blue-500"></i> Trade Logs</h2>
-        <form onsubmit="addTrade(event)" class="bg-white/5 p-6 rounded-[2.5rem] border border-white/5 space-y-4">
-            <div class="space-y-1"><label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Waktu Trade</label><input id="t-date" type="datetime-local" required></div>
+        <h2 id="journal-title" class="text-xl font-black uppercase italic tracking-tight flex items-center gap-2"><i data-lucide="book-marked" class="w-5 h-5 text-blue-500"></i> Trade Logs</h2>
+        
+        <form id="trade-form" onsubmit="addTrade(event)" class="bg-white/5 p-6 rounded-[2.5rem] border border-white/5 space-y-4">
+            <div class="space-y-1"><label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Waktu Trade</label><input id="t-date" type="date" required></div>
             <div class="grid grid-cols-2 gap-3"><input id="t-pair" placeholder="Simbol (Contoh: GOLD)" required><select id="t-type" class="font-bold"><option value="BUY">BUY</option><option value="SELL">SELL</option></select></div>
             <div class="grid grid-cols-2 gap-3"><input id="t-entry" type="number" step="0.0000001" placeholder="Entry Price"><input id="t-exit" type="number" step="0.0000001" placeholder="Exit Price"></div>
             
-            <!-- IMAGE INPUT FIELD -->
             <div class="space-y-1">
                 <label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Screenshot Setup (Optional)</label>
                 <div class="relative">
@@ -569,7 +710,6 @@
                         <span class="text-[10px] font-black uppercase text-slate-400">Pilih Gambar</span>
                     </label>
                 </div>
-                <!-- IMAGE PREVIEW CONTAINER -->
                 <div id="image-preview-container" class="hidden relative mt-2 rounded-2xl overflow-hidden border border-white/10">
                     <img id="image-preview" class="w-full h-40 object-cover opacity-70">
                     <button type="button" onclick="removeSelectedImage()" class="absolute top-2 right-2 bg-rose-600 p-1.5 rounded-lg text-white"><i data-lucide="x" class="w-3 h-3"></i></button>
@@ -578,11 +718,21 @@
 
             <div class="space-y-1"><label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Hasil Akhir (PnL)</label><input id="t-pnl" type="number" step="0.01" placeholder="Cth: 50.5" required class="border-blue-500/30"></div>
             <div class="space-y-1"><label class="text-[9px] font-black text-slate-500 uppercase ml-2 tracking-widest">Catatan</label><textarea id="t-notes" placeholder="Berikan alasan entry, emosi, atau evaluasi..."></textarea></div>
-            <button type="submit" class="w-full btn-primary py-4 rounded-2xl font-black uppercase text-xs shadow-lg tracking-widest mt-2 text-white">Commit Trade</button>
+            
+            <div class="flex gap-2">
+                <button type="submit" id="commit-btn" class="flex-1 btn-primary py-4 rounded-2xl font-black uppercase text-xs shadow-lg tracking-widest mt-2 text-white">Commit Trade</button>
+                <button type="button" onclick="resetTradeForm()" class="bg-white/5 border border-white/5 px-6 rounded-2xl font-black text-slate-500 text-[10px] uppercase mt-2">Batal</button>
+            </div>
         </form>
+
+        <div class="flex justify-between items-center">
+            <h3 class="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">History Trade</h3>
+            <button onclick="deleteAllTrades()" class="text-[8px] font-black text-rose-500/50 uppercase tracking-widest flex items-center gap-1 hover:text-rose-500 transition-colors"><i data-lucide="trash-2" class="w-3 h-3"></i> Clear All</button>
+        </div>
         <div id="trades-list" class="space-y-3 pb-20"></div>
     </section>
 
+    <!-- NAVIGATION BAR -->
     <nav id="main-nav" class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 glass w-[90%] max-w-sm border border-white/10 rounded-[2.5rem] p-2 flex justify-between z-50 shadow-2xl">
         <button onclick="navigateTo('dashboard')" data-target="dashboard" class="nav-link flex-1 flex flex-col items-center gap-1 py-2">
             <i data-lucide="layout-dashboard" class="w-5 h-5 text-blue-400"></i><span class="text-[8px] font-black uppercase text-blue-400 tracking-widest">Home</span>
@@ -598,4 +748,3 @@
     <script> window.onload = () => { lucide.createIcons(); }; </script>
 </body>
 </html>
-
